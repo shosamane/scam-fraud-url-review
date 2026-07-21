@@ -55,8 +55,7 @@
     marks: {},
     selections: new Set(),
     notes: {},
-    paneExpanded: new Set(),
-    paneAutoExpanded: new Set(),
+    paneCollapsed: new Set(),
     hostNameToIndex: null,
     storageAvailable: true,
     activeReviewNodeId: null,
@@ -1552,28 +1551,59 @@
     );
   }
 
-  function renderPaneNode(nodeId) {
+  function collectSelectionInclude() {
+    // Nodes to draw in the pane: for each selected node, its full ancestor chain
+    // (so the host → …/… path hierarchy is shown) plus its non-struck subtree.
+    // Shared ancestors merge, so the pane is one real tree per host.
+    const include = new Set();
+    for (const selUrl of state.selections) {
+      const rootId = findNodeIdByUrl(selUrl);
+      if (rootId === null) {
+        continue;
+      }
+      let ancestor = rootId;
+      while (ancestor !== -1) {
+        include.add(ancestor);
+        ancestor = window.URL_TREE_DATA.nodes[ancestor][NODE_PARENT];
+      }
+      const stack = [rootId];
+      while (stack.length) {
+        const nodeId = stack.pop();
+        if (reviewStateForNode(nodeId).struck || !nodeVisible(nodeId)) {
+          continue;
+        }
+        include.add(nodeId);
+        for (const childId of window.URL_TREE_DATA.nodes[nodeId][NODE_CHILDREN]) {
+          stack.push(childId);
+        }
+      }
+    }
+    return include;
+  }
+
+  function renderPaneTreeNode(nodeId, include) {
     const node = window.URL_TREE_DATA.nodes[nodeId];
+    const isHostRoot = node[NODE_PARENT] === -1;
     const item = document.createElement("li");
     item.className = "selection-node";
     const row = document.createElement("div");
     row.className = "selection-node-row";
-    const children = paneVisibleChildren(nodeId);
-    const isEndpoint = Boolean(filteredVariantCount(nodeId));
-    const expanded = state.paneExpanded.has(nodeId);
+    const children = node[NODE_CHILDREN].filter((childId) => include.has(childId));
+    const isEndpoint = !isHostRoot && Boolean(filteredVariantCount(nodeId));
+    const collapsed = state.paneCollapsed.has(nodeId);
 
     if (children.length) {
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "pane-toggle";
-      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-      toggle.setAttribute("aria-label", expanded ? "Collapse" : "Expand");
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      toggle.setAttribute("aria-label", collapsed ? "Expand" : "Collapse");
       toggle.append(createChevron());
       toggle.addEventListener("click", () => {
-        if (state.paneExpanded.has(nodeId)) {
-          state.paneExpanded.delete(nodeId);
+        if (state.paneCollapsed.has(nodeId)) {
+          state.paneCollapsed.delete(nodeId);
         } else {
-          state.paneExpanded.add(nodeId);
+          state.paneCollapsed.add(nodeId);
         }
         renderSelectionPane();
       });
@@ -1584,9 +1614,13 @@
       row.append(spacer);
     }
 
+    const hostName = window.URL_TREE_DATA.hosts[hostIndexForNode(nodeId)][HOST_NAME];
     const label = document.createElement(isEndpoint ? "a" : "span");
     label.className = "selection-label";
-    label.textContent = node[NODE_LABEL];
+    label.textContent = isHostRoot ? hostName : node[NODE_LABEL];
+    if (isHostRoot) {
+      label.classList.add("is-host");
+    }
     if (isEndpoint) {
       label.href = nodeUrl(nodeId);
       label.target = "_blank";
@@ -1624,11 +1658,11 @@
     }
 
     item.append(row);
-    if (children.length && expanded) {
+    if (children.length && !collapsed) {
       const list = document.createElement("ul");
       list.className = "selection-node-list";
       for (const childId of children) {
-        list.append(renderPaneNode(childId));
+        list.append(renderPaneTreeNode(childId, include));
       }
       item.append(list);
     }
@@ -1705,25 +1739,23 @@
     const endpoints = collectSelectionEndpoints();
     elements.selectionCount.textContent = `${formatNumber(endpoints.length)} URL${endpoints.length === 1 ? "" : "s"}`;
     elements.selectionBody.replaceChildren();
-    const roots = [...state.selections]
-      .map((url) => ({ url, id: findNodeIdByUrl(url) }))
-      .filter((entry) => entry.id !== null)
-      .sort((a, b) => a.url.localeCompare(b.url));
-    if (!roots.length) {
+    if (!state.selections.size) {
       elements.selectionBody.innerHTML =
         '<div class="empty-state">Select a node in the tree to add its paths here.</div>';
       return;
     }
+    const include = collectSelectionInclude();
+    const hostIndices = new Set();
+    for (const nodeId of include) {
+      hostIndices.add(hostIndexForNode(nodeId));
+    }
+    const sortedHosts = [...hostIndices].sort((a, b) =>
+      window.URL_TREE_DATA.hosts[a][HOST_NAME].localeCompare(window.URL_TREE_DATA.hosts[b][HOST_NAME])
+    );
     const list = document.createElement("ul");
     list.className = "selection-node-list selection-root-list";
-    for (const { id } of roots) {
-      // Auto-expand each selected root the first time it appears; respect the
-      // user's collapse choice afterwards.
-      if (!state.paneAutoExpanded.has(id)) {
-        state.paneAutoExpanded.add(id);
-        state.paneExpanded.add(id);
-      }
-      list.append(renderPaneNode(id));
+    for (const hostIndex of sortedHosts) {
+      list.append(renderPaneTreeNode(window.URL_TREE_DATA.hosts[hostIndex][HOST_ROOT], include));
     }
     elements.selectionBody.append(list);
   }

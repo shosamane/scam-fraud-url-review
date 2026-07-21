@@ -20,6 +20,7 @@ anyone who opens the app.
 | `tree.html` | yes | The explorer |
 | `app.js`, `styles.css` | yes | Front end |
 | `server.py`, `store.py` | yes | FastAPI app + SQLite storage |
+| `export_annotations.py` | yes | Dump all annotation data for analysis (see below) |
 | `requirements.txt`, `README.md`, `.gitignore` | yes | |
 | `data/institutions.json`, `data/README.md` | yes | Institution manifest + docs |
 | `data/tree-<id>.js` | **no** | The ~12 MB URL tree data — transfer separately |
@@ -66,6 +67,21 @@ Restart=always
   ```
   `review.db` is **not** transferred — it is created on first run. (Only copy an
   existing `review.db` up if you want to preserve annotations already made.)
+
+## Exporting annotations for analysis
+
+Run on the server (next to `review.db`), standard library only:
+
+```bash
+python3 export_annotations.py                 # all institutions
+python3 export_annotations.py --institution chase
+```
+
+It writes one timestamped zip to `exports/` per run:
+`annotations_export_<UTC>.zip`, with a folder per institution containing the
+shared keyword list, per-reviewer selections/strikes/notes, a `selections_by_url.tsv`
+agreement matrix, and `notes_by_url.txt` (every reviewer's note for a URL together,
+sorted by URL so a path/subtree groups). `exports/` is gitignored.
 
 ## Backups & durability
 

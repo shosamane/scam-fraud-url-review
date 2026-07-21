@@ -427,6 +427,7 @@ mark { padding: 0 2px; border-radius: 3px; color: inherit; background: var(--amb
   overflow-wrap: anywhere;
 }
 .selection-label.is-directory { color: #6a6f96; }
+.selection-label.is-host { color: var(--ink); font-weight: 800; font-family: Inter, ui-sans-serif, sans-serif; }
 .selection-label:not(.is-directory):hover { color: var(--teal); text-decoration: underline; }
 .pane-notes-button, .pane-remove-button {
   flex: 0 0 auto;
