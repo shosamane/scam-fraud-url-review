@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>URL Tree Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body data-source="union">
+  <div class="loading-screen" id="loadingScreen" role="status">
+    <div class="loading-mark">UT</div>
+    <p>Preparing the URL tree…</p>
+  </div>
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="Home">
+      <span class="brand-mark">UT</span>
+      <span><strong>URL Tree</strong><small>Scam &amp; fraud review</small></span>
+    </a>
+    <div class="header-right">
+      <span class="user-badge" id="userBadge"></span>
+      <label class="inst-select">
+        <span>Institution</span>
+        <select id="institutionSelect" aria-label="Select institution"></select>
+      </label>
+      <a class="home-link" href="index.html">Home</a>
+    </div>
+  </header>
+  <main class="app-shell">
+    <aside class="search-panel" aria-label="URL search">
+      <div class="eyebrow">Search workspace</div>
+      <h1 id="viewTitle">Union URL tree</h1>
+      <p class="intro" id="viewDescription"></p>
+      <div class="metric-grid" id="metricGrid"></div>
+      <form id="searchForm" class="search-form">
+        <label for="searchInput">Keywords or full clean URLs</label>
+        <textarea id="searchInput" rows="4" placeholder="Enter keywords separated by commas or lines" spellcheck="false"></textarea>
+        <div class="field-row">
+          <label>Match mode
+            <select id="matchMode">
+              <option value="partial">Partial URL match</option>
+              <option value="exact">Full URL match</option>
+            </select>
+          </label>
+          <label id="termLogicLabel">Terms
+            <select id="termLogic">
+              <option value="any">Match any</option>
+              <option value="all">Match all</option>
+            </select>
+          </label>
+        </div>
+        <p class="search-hint" id="searchHint">Partial mode accepts comma- or line-separated terms.</p>
+        <div class="button-row">
+          <button class="primary-button" type="submit">Search paths</button>
+          <button class="quiet-button" id="clearSearch" type="button">Clear</button>
+        </div>
+      </form>
+      <section class="results-section" aria-live="polite">
+        <div class="results-heading">
+          <h2>Results</h2>
+          <span id="resultCount">No search yet</span>
+        </div>
+        <div id="results" class="results-list"></div>
+        <div class="pagination" id="pagination" hidden>
+          <button type="button" id="previousPage">Previous</button>
+          <span id="pageStatus"></span>
+          <button type="button" id="nextPage">Next</button>
+        </div>
+      </section>
+    </aside>
+    <section class="tree-workspace" aria-label="Interactive URL tree">
+      <div class="tree-toolbar">
+        <div>
+          <div class="eyebrow">Interactive map</div>
+          <h2>Hosts and URL paths</h2>
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" id="expandHosts">Expand hosts</button>
+          <button type="button" id="collapseAll">Collapse all</button>
+        </div>
+      </div>
+      <div class="tree-legend">
+        <span><i class="legend-dot endpoint-dot"></i> URL endpoint</span>
+        <span><i class="legend-dot match-dot"></i> Keyword match</span>
+        <span><i class="legend-dot path-dot"></i> Matched path</span>
+        <span>Links open in a new tab</span>
+      </div>
+      <div id="tree" class="tree" aria-label="URL hierarchy"></div>
+    </section>
+  </main>
+</body>
+</html>

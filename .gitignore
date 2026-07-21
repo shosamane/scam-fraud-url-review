@@ -1,0 +1,11 @@
+# Generated data (transfer to the server separately — too large for git)
+data/tree-*.js
+
+# Runtime database + backups
+review.db
+review.db-wal
+review.db-shm
+backups/
+
+__pycache__/
+*.pyc
