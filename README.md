@@ -16,9 +16,8 @@ anyone who opens the app.
 
 | File | In git? | Notes |
 |------|:------:|-------|
-| `index.html` | yes | Landing page (3 buttons) |
+| `index.html` | yes | Landing page (Project Timeline links to a Google Sheet; two annotation views) |
 | `tree.html` | yes | The explorer |
-| `timeline.html` | yes | Project timeline (placeholder — fill in) |
 | `app.js`, `styles.css` | yes | Front end |
 | `server.py`, `store.py` | yes | FastAPI app + SQLite storage |
 | `requirements.txt`, `README.md`, `.gitignore` | yes | |

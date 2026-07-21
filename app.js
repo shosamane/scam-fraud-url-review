@@ -1116,7 +1116,7 @@
       ? "Full match mode accepts one complete URL per line."
       : "Partial mode accepts comma- or line-separated terms.";
     elements.searchInput.placeholder = exact
-      ? "https://www.chase.com/clean/path"
+      ? "https://www.example.com/clean/path"
       : "mortgage, calculator\nsmall business";
   }
 
@@ -1358,35 +1358,33 @@
     window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
   }
 
-  function validImportedMark(url, mark) {
+  function urlHostInDataset(url) {
+    // Accept a clean https URL whose host belongs to the currently-loaded
+    // institution's tree. Institution-agnostic, so import works for any dataset.
     try {
       const parsed = new URL(url);
       return Boolean(
         parsed.protocol === "https:" &&
         !parsed.search &&
         !parsed.hash &&
-        (parsed.hostname === "chase.com" || parsed.hostname.endsWith(".chase.com")) &&
-        mark &&
-        ["node", "branch"].includes(mark.scope) &&
-        ["irrelevant", "offline"].includes(mark.reason)
+        state.hostNameToIndex && state.hostNameToIndex.has(parsed.hostname)
       );
     } catch {
       return false;
     }
   }
 
+  function validImportedMark(url, mark) {
+    return Boolean(
+      urlHostInDataset(url) &&
+      mark &&
+      ["node", "branch"].includes(mark.scope) &&
+      ["irrelevant", "offline"].includes(mark.reason)
+    );
+  }
+
   function validSelectionUrl(url) {
-    try {
-      const parsed = new URL(url);
-      return Boolean(
-        parsed.protocol === "https:" &&
-        !parsed.search &&
-        !parsed.hash &&
-        (parsed.hostname === "chase.com" || parsed.hostname.endsWith(".chase.com"))
-      );
-    } catch {
-      return false;
-    }
+    return urlHostInDataset(url);
   }
 
   async function importReviewMarks(file) {

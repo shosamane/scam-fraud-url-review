@@ -45,8 +45,24 @@ BACKUP_DIR = os.environ.get("REVIEW_BACKUP_DIR", os.path.join(HERE, "backups"))
 BASE_PATH = os.environ.get("BASE_PATH", "").rstrip("/")  # e.g. "/webhook5"
 
 ALLOWED_USERS = {"aziz", "sudhamshu"}
-_HIDDEN = {"server.py", "store.py", "requirements.txt", "review.db",
-           "review.db-wal", "review.db-shm"}
+
+
+def _is_blocked(path: str) -> bool:
+    """Never serve the database, its backups, dotfiles (.git, .gitignore), or the
+    server source over the static handler."""
+    parts = [p for p in path.replace("\\", "/").strip("/").split("/")
+             if p and p not in (".", "..")]
+    if any(p.startswith(".") for p in parts):        # .git/, .gitignore, ...
+        return True
+    if parts and parts[0] == "backups":              # DB snapshots
+        return True
+    base = parts[-1] if parts else ""
+    if base.endswith((".py", ".db", ".db-wal", ".db-shm")):
+        return True
+    if base == "requirements.txt":
+        return True
+    return False
+
 
 store = ReviewStore()
 store.start_backups(BACKUP_DIR)
@@ -118,7 +134,7 @@ class _SafeStatic(StaticFiles):
     """Static files, but never hand out the server source or the database."""
 
     async def get_response(self, path: str, scope):
-        if os.path.basename(path) in _HIDDEN:
+        if _is_blocked(path):
             return PlainTextResponse("Not found", status_code=404)
         return await super().get_response(path, scope)
 
