@@ -9,3 +9,8 @@ backups/
 
 __pycache__/
 *.pyc
+
+# run.sh runtime artifacts
+venv/
+logs/
+server.pid
