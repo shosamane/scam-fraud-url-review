@@ -106,7 +106,7 @@ select:focus-visible {
 .landing { width: min(680px, 100%); text-align: center; }
 .landing.timeline { text-align: left; }
 .landing .landing-mark { width: 60px; height: 60px; margin: 0 auto 20px; border-radius: 18px; display: grid; place-items: center; color: #fff; background: var(--teal); font-weight: 800; font-size: 20px; box-shadow: var(--shadow); }
-.landing h1 { font-size: clamp(26px, 4vw, 38px); }
+.landing h1 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 26px; }
 .landing-intro { margin: 12px 0 28px; color: var(--muted); line-height: 1.6; }
 .landing-buttons { display: grid; gap: 12px; }
 .landing-button { display: flex; flex-direction: column; gap: 3px; padding: 20px 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow); text-decoration: none; text-align: left; transition: transform 120ms ease, border-color 120ms ease; }
