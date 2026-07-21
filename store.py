@@ -61,12 +61,20 @@ class ReviewStore:
                     user        TEXT NOT NULL,
                     marks       TEXT NOT NULL DEFAULT '{}',
                     selections  TEXT NOT NULL DEFAULT '[]',
+                    notes       TEXT NOT NULL DEFAULT '{}',
                     version     INTEGER NOT NULL DEFAULT 0,
                     updated_at  TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (institution, user)
                 )
                 """
             )
+            # Migration: add the notes column to databases created before notes
+            # existed (preserves existing rows).
+            have = [r["name"] for r in conn.execute("PRAGMA table_info(annotations)")]
+            if "notes" not in have:
+                conn.execute(
+                    "ALTER TABLE annotations ADD COLUMN notes TEXT NOT NULL DEFAULT '{}'"
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS keywords (
@@ -93,20 +101,18 @@ class ReviewStore:
     def get_state(self, institution: str, user: str) -> dict:
         with self._connect() as conn:
             ann = conn.execute(
-                "SELECT marks, selections, version, updated_at "
+                "SELECT marks, selections, notes, version, updated_at "
                 "FROM annotations WHERE institution = ? AND user = ?",
                 (institution, user),
             ).fetchone()
             kw = conn.execute(
                 "SELECT search FROM keywords WHERE institution = ?", (institution,)
             ).fetchone()
-        marks = json.loads(ann["marks"]) if ann else {}
-        selections = json.loads(ann["selections"]) if ann else []
-        search = json.loads(kw["search"]) if kw else {}
         return {
-            "marks": marks,
-            "selections": selections,
-            "search": search,
+            "marks": json.loads(ann["marks"]) if ann else {},
+            "selections": json.loads(ann["selections"]) if ann else [],
+            "notes": json.loads(ann["notes"]) if ann else {},
+            "search": json.loads(kw["search"]) if kw else {},
             "version": ann["version"] if ann else 0,
             "updatedAt": ann["updated_at"] if ann else "",
         }
@@ -114,22 +120,27 @@ class ReviewStore:
     # -- writes --------------------------------------------------------------
 
     def put_state(self, institution: str, user: str, marks: dict,
-                  selections: list, search: dict) -> dict:
+                  selections: list, search: dict, notes: dict | None = None) -> dict:
         if not isinstance(marks, dict):
             raise ValueError("marks must be an object")
         if not isinstance(selections, list):
             raise ValueError("selections must be an array")
         if not isinstance(search, dict):
             raise ValueError("search must be an object")
+        if notes is None:
+            notes = {}
+        if not isinstance(notes, dict):
+            raise ValueError("notes must be an object")
         now = _now()
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO annotations (institution, user, marks, selections, version, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?)
+                INSERT INTO annotations (institution, user, marks, selections, notes, version, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?)
                 ON CONFLICT(institution, user) DO UPDATE SET
                     marks=excluded.marks,
                     selections=excluded.selections,
+                    notes=excluded.notes,
                     version=annotations.version + 1,
                     updated_at=excluded.updated_at
                 """,
@@ -137,6 +148,7 @@ class ReviewStore:
                     institution, user,
                     json.dumps(marks, separators=(",", ":")),
                     json.dumps(selections, separators=(",", ":")),
+                    json.dumps(notes, separators=(",", ":")),
                     now,
                 ),
             )

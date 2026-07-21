@@ -75,6 +75,7 @@ class StateBody(BaseModel):
     marks: Dict[str, Any] = {}
     selections: List[str] = []
     search: Dict[str, Any] = {}
+    notes: Dict[str, str] = {}
 
 
 def _institutions() -> List[dict]:
@@ -124,7 +125,9 @@ def get_state(institution: str = "chase", user: str = "sudhamshu") -> dict:
 
 @api.put("/state")
 def put_state(body: StateBody, institution: str = "chase", user: str = "sudhamshu") -> dict:
-    return store.put_state(institution, _valid_user(user), body.marks, body.selections, body.search)
+    return store.put_state(
+        institution, _valid_user(user), body.marks, body.selections, body.search, body.notes
+    )
 
 
 app.include_router(api, prefix=f"{BASE_PATH}/api")

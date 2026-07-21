@@ -54,9 +54,14 @@
     hideConfirmedNotFound: true,
     marks: {},
     selections: new Set(),
+    notes: {},
+    paneExpanded: new Set(),
+    paneAutoExpanded: new Set(),
     hostNameToIndex: null,
     storageAvailable: true,
     activeReviewNodeId: null,
+    activeNoteUrl: null,
+    noteTimer: null,
     matchNodeIds: new Set(),
     pathNodeIds: new Set(),
     pathHostIds: new Set(),
@@ -112,13 +117,17 @@
         return null;
       }
     }
+    let pendingCallbacks = [];
     async function flush() {
       timer = null;
       if (!pendingBody) {
         return;
       }
       const body = pendingBody();
+      const callbacks = pendingCallbacks;
       pendingBody = null;
+      pendingCallbacks = [];
+      let ok = false;
       try {
         const response = await fetch(stateUrl(), {
           method: "PUT",
@@ -126,15 +135,27 @@
           body: JSON.stringify(body),
         });
         reachable = response.ok;
+        ok = response.ok;
       } catch (error) {
         reachable = false;
       }
+      for (const cb of callbacks) {
+        cb(ok);
+      }
     }
-    function push(getBody) {
+    // onDone(ok) fires once the next flush to the server completes (used by the
+    // notes editor to show a Saved / not-saved label). Coalesced pushes all fire.
+    function push(getBody, onDone) {
       if (!reachable) {
-        return; // no server this session; localStorage is the store
+        if (onDone) {
+          onDone(false); // localStorage only this session
+        }
+        return;
       }
       pendingBody = getBody;
+      if (onDone) {
+        pendingCallbacks.push(onDone);
+      }
       if (!timer) {
         timer = window.setTimeout(flush, 700);
       }
@@ -255,6 +276,9 @@
       if (parsed && parsed.version === 2 && Array.isArray(parsed.selections)) {
         state.selections = new Set(parsed.selections);
       }
+      if (parsed && parsed.notes && typeof parsed.notes === "object") {
+        state.notes = parsed.notes;
+      }
     } catch (error) {
       console.warn("Review marks could not be loaded", error);
       state.storageAvailable = false;
@@ -265,7 +289,12 @@
     try {
       window.localStorage.setItem(
         REVIEW_STORAGE_KEY,
-        JSON.stringify({ version: 2, marks: state.marks, selections: [...state.selections] })
+        JSON.stringify({
+          version: 2,
+          marks: state.marks,
+          selections: [...state.selections],
+          notes: state.notes,
+        })
       );
       state.storageAvailable = true;
     } catch (error) {
@@ -284,6 +313,7 @@
     return {
       marks: state.marks,
       selections: [...state.selections],
+      notes: state.notes,
       search: {
         terms: elements.searchInput ? elements.searchInput.value : "",
         matchMode: elements.matchMode ? elements.matchMode.value : "partial",
@@ -1523,22 +1553,78 @@
   }
 
   function renderPaneNode(nodeId) {
+    const node = window.URL_TREE_DATA.nodes[nodeId];
     const item = document.createElement("li");
     item.className = "selection-node";
+    const row = document.createElement("div");
+    row.className = "selection-node-row";
+    const children = paneVisibleChildren(nodeId);
     const isEndpoint = Boolean(filteredVariantCount(nodeId));
+    const expanded = state.paneExpanded.has(nodeId);
+
+    if (children.length) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "pane-toggle";
+      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      toggle.setAttribute("aria-label", expanded ? "Collapse" : "Expand");
+      toggle.append(createChevron());
+      toggle.addEventListener("click", () => {
+        if (state.paneExpanded.has(nodeId)) {
+          state.paneExpanded.delete(nodeId);
+        } else {
+          state.paneExpanded.add(nodeId);
+        }
+        renderSelectionPane();
+      });
+      row.append(toggle);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "pane-spacer";
+      row.append(spacer);
+    }
+
     const label = document.createElement(isEndpoint ? "a" : "span");
     label.className = "selection-label";
-    label.textContent = window.URL_TREE_DATA.nodes[nodeId][NODE_LABEL];
+    label.textContent = node[NODE_LABEL];
     if (isEndpoint) {
       label.href = nodeUrl(nodeId);
       label.target = "_blank";
       label.rel = "noopener noreferrer";
+      label.title = nodeUrl(nodeId);
     } else {
       label.classList.add("is-directory");
     }
-    item.append(label);
-    const children = paneVisibleChildren(nodeId);
-    if (children.length) {
+    row.append(label);
+
+    if (isEndpoint) {
+      const url = nodeUrl(nodeId);
+      const notesButton = document.createElement("button");
+      notesButton.type = "button";
+      notesButton.className = "pane-notes-button";
+      const hasNote = Boolean(state.notes[url] && state.notes[url].trim());
+      if (hasNote) {
+        notesButton.classList.add("has-note");
+      }
+      notesButton.textContent = hasNote ? "Notes •" : "Notes";
+      notesButton.title = hasNote ? "Edit your note" : "Add a note";
+      notesButton.addEventListener("click", () => openNotesPanel(nodeId));
+      row.append(notesButton);
+    }
+    if (isEndpoint || isSelected(nodeId)) {
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "pane-remove-button";
+      removeButton.textContent = "Remove";
+      removeButton.title = isSelected(nodeId)
+        ? "Remove this selected branch"
+        : "Remove this URL from the selection (strikes it)";
+      removeButton.addEventListener("click", () => removeFromSelection(nodeId));
+      row.append(removeButton);
+    }
+
+    item.append(row);
+    if (children.length && expanded) {
       const list = document.createElement("ul");
       list.className = "selection-node-list";
       for (const childId of children) {
@@ -1547,6 +1633,18 @@
       item.append(list);
     }
     return item;
+  }
+
+  function removeFromSelection(nodeId) {
+    // A directly-selected node is deselected; a derived leaf is struck (which
+    // excludes it from the selection's subtree) — the chosen "Remove = strike".
+    if (state.selections.has(nodeUrl(nodeId))) {
+      state.selections.delete(nodeUrl(nodeId));
+    } else {
+      strikeBranch(nodeId, "removed from selection");
+    }
+    persistReviewMarks();
+    afterReviewChange();
   }
 
   function collectSelectionEndpoints() {
@@ -1613,30 +1711,21 @@
       .sort((a, b) => a.url.localeCompare(b.url));
     if (!roots.length) {
       elements.selectionBody.innerHTML =
-        '<div class="empty-state">Select a node in the tree to copy its paths here.</div>';
+        '<div class="empty-state">Select a node in the tree to add its paths here.</div>';
       return;
     }
+    const list = document.createElement("ul");
+    list.className = "selection-node-list selection-root-list";
     for (const { id } of roots) {
-      const block = document.createElement("section");
-      block.className = "selection-block";
-      const head = document.createElement("div");
-      head.className = "selection-block-head";
-      const crumb = document.createElement("span");
-      crumb.className = "selection-crumb";
-      crumb.textContent = nodeUrl(id);
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "selection-remove";
-      remove.textContent = "Remove";
-      remove.addEventListener("click", () => toggleSelect(id));
-      head.append(crumb, remove);
-      block.append(head);
-      const list = document.createElement("ul");
-      list.className = "selection-node-list selection-root-list";
+      // Auto-expand each selected root the first time it appears; respect the
+      // user's collapse choice afterwards.
+      if (!state.paneAutoExpanded.has(id)) {
+        state.paneAutoExpanded.add(id);
+        state.paneExpanded.add(id);
+      }
       list.append(renderPaneNode(id));
-      block.append(list);
-      elements.selectionBody.append(block);
     }
+    elements.selectionBody.append(list);
   }
 
   function mountSelectionPane() {
@@ -1655,10 +1744,9 @@
         </div>
         <span id="selectionCount">0 URLs</span>
       </div>
-      <p class="selection-note">Selecting a node copies its non-struck subtree here, keeping the tree structure. Struck children are left out.</p>
+      <p class="selection-note">Expand a branch to manage it. On each URL: <strong>Notes</strong> to jot a private note, <strong>Remove</strong> to drop it (strikes it).</p>
       <div class="selection-actions">
         <button type="button" id="copySelection" class="quiet-button">Copy URLs</button>
-        <button type="button" id="clearSelection" class="quiet-button">Clear</button>
       </div>
       <div id="selectionBody" class="selection-body"></div>
       <div id="selectionTools" class="selection-tools"></div>`;
@@ -1670,13 +1758,114 @@
     elements.selectionTools = pane.querySelector("#selectionTools");
     const copyButton = pane.querySelector("#copySelection");
     copyButton.addEventListener("click", () => copySelectionUrls(copyButton));
-    pane.querySelector("#clearSelection").addEventListener("click", () => {
-      if (state.selections.size && window.confirm("Clear all selected paths?")) {
-        state.selections.clear();
-        persistReviewMarks();
-        afterReviewChange();
+  }
+
+  // ------------------------------------------------------------------
+  // Notes panel — per-user, per-URL; slides in over the search pane.
+  // ------------------------------------------------------------------
+
+  function mountNotesPanel() {
+    const panel = document.createElement("aside");
+    panel.className = "notes-panel";
+    panel.setAttribute("aria-label", "URL note");
+    panel.innerHTML = `
+      <div class="notes-head">
+        <div class="eyebrow">Note · ${USER}</div>
+        <button type="button" class="notes-close" aria-label="Close">×</button>
+      </div>
+      <p class="notes-url" id="notesUrl"></p>
+      <textarea id="notesText" class="notes-text" spellcheck="true" placeholder="Type your note…  Enter = new line,  Shift+Enter = save."></textarea>
+      <div class="notes-foot">
+        <span class="notes-status" id="notesStatus"></span>
+        <span class="notes-hint">Shift+Enter saves · also autosaves</span>
+      </div>`;
+    document.body.append(panel);
+    elements.notesPanel = panel;
+    elements.notesUrl = panel.querySelector("#notesUrl");
+    elements.notesText = panel.querySelector("#notesText");
+    elements.notesStatus = panel.querySelector("#notesStatus");
+    panel.querySelector(".notes-close").addEventListener("click", closeNotesPanel);
+    elements.notesText.addEventListener("input", () => {
+      setNoteStatus("unsaved");
+      window.clearTimeout(state.noteTimer);
+      state.noteTimer = window.setTimeout(saveActiveNote, 1200);
+    });
+    elements.notesText.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.shiftKey) {
+        event.preventDefault(); // Enter alone makes a new line; Shift+Enter saves.
+        window.clearTimeout(state.noteTimer);
+        saveActiveNote();
       }
     });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.activeNoteUrl !== null) {
+        closeNotesPanel();
+      }
+    });
+  }
+
+  function setNoteStatus(kind) {
+    if (!elements.notesStatus) {
+      return;
+    }
+    const map = {
+      saved: ["Saved", "is-saved"],
+      saving: ["Saving…", "is-saving"],
+      unsaved: ["Unsaved changes", "is-unsaved"],
+      offline: ["Saved on this device", "is-offline"],
+    };
+    const [text, cls] = map[kind] || ["", ""];
+    elements.notesStatus.textContent = text;
+    elements.notesStatus.className = `notes-status ${cls}`;
+  }
+
+  function openNotesPanel(nodeId) {
+    const url = nodeUrl(nodeId);
+    if (state.activeNoteUrl !== null && state.activeNoteUrl !== url) {
+      window.clearTimeout(state.noteTimer);
+      saveActiveNote(); // flush the previously-open note before switching
+    }
+    state.activeNoteUrl = url;
+    elements.notesUrl.textContent = url;
+    elements.notesText.value = state.notes[url] || "";
+    setNoteStatus(state.notes[url] ? "saved" : "none");
+    elements.notesPanel.classList.add("is-open");
+    window.requestAnimationFrame(() => elements.notesText.focus());
+  }
+
+  function saveActiveNote() {
+    if (state.activeNoteUrl === null) {
+      return;
+    }
+    const url = state.activeNoteUrl;
+    const text = elements.notesText.value;
+    if (text.trim()) {
+      state.notes[url] = text;
+    } else {
+      delete state.notes[url];
+    }
+    writeLocalReview(); // durable local cache immediately
+    if (SYNC.reachable) {
+      setNoteStatus("saving");
+      SYNC.push(syncBody, (ok) => {
+        if (state.activeNoteUrl === url) {
+          setNoteStatus(ok ? "saved" : "offline");
+        }
+      });
+    } else {
+      setNoteStatus("offline");
+    }
+  }
+
+  function closeNotesPanel() {
+    if (state.activeNoteUrl === null) {
+      return;
+    }
+    window.clearTimeout(state.noteTimer);
+    saveActiveNote(); // never lose the last edit
+    state.activeNoteUrl = null;
+    elements.notesPanel.classList.remove("is-open");
+    renderSelectionPane(); // refresh the "Notes •" indicators
   }
 
   function cacheElements() {
@@ -1757,6 +1946,7 @@
     mountHeaderMetrics();
     loadReviewMarks();
     mountSelectionPane();
+    mountNotesPanel();
     renderReviewTools();
     const legend = document.querySelector(".tree-legend");
     if (legend) {
@@ -1799,12 +1989,17 @@
     startKeywordSync(server.search && server.search.terms);
     const serverHasData =
       (server.marks && Object.keys(server.marks).length > 0) ||
-      (Array.isArray(server.selections) && server.selections.length > 0);
-    const localHasData = Object.keys(state.marks).length > 0 || state.selections.size > 0;
+      (Array.isArray(server.selections) && server.selections.length > 0) ||
+      (server.notes && Object.keys(server.notes).length > 0);
+    const localHasData =
+      Object.keys(state.marks).length > 0 ||
+      state.selections.size > 0 ||
+      Object.keys(state.notes).length > 0;
 
     if (serverHasData) {
       state.marks = server.marks && typeof server.marks === "object" ? server.marks : {};
       state.selections = new Set(Array.isArray(server.selections) ? server.selections : []);
+      state.notes = server.notes && typeof server.notes === "object" ? server.notes : {};
       writeLocalReview();
       // rebuildTree() clears the search box, so set the keywords AFTER it.
       rebuildTree();
