@@ -1344,16 +1344,17 @@
     if (!state.results.length) {
       return;
     }
-    const liveMatchUrls = [];
-    for (const result of state.results) {
-      if (!reviewStateForNode(result.nodeId).struck) {
-        liveMatchUrls.push(result.url);
-      }
-    }
+    // Re-check strike state live (not a pre-loop snapshot): an intermediate
+    // matched ancestor struck DURING this cascade must stop counting as a live
+    // match, or the cascade halts one level too low.
     const hasLiveMatchBelow = (nodeId) => {
       const selfUrl = nodeUrl(nodeId);
       const prefix = selfUrl.endsWith("/") ? selfUrl : `${selfUrl}/`;
-      return liveMatchUrls.some((url) => url !== selfUrl && url.startsWith(prefix));
+      return state.results.some((result) =>
+        result.url !== selfUrl
+        && result.url.startsWith(prefix)
+        && !reviewStateForNode(result.nodeId).struck
+      );
     };
     let changed = false;
     let currentId = window.URL_TREE_DATA.nodes[struckNodeId][NODE_PARENT];
@@ -1361,7 +1362,7 @@
       if (hasSelectionAtOrBelow(currentId) || hasLiveMatchBelow(currentId)) {
         break;
       }
-      changed = strikeBranch(currentId, "auto: matched children all struck") || changed;
+      changed = strikeBranch(currentId, "auto: matched descendants all struck") || changed;
       currentId = window.URL_TREE_DATA.nodes[currentId][NODE_PARENT];
     }
     if (changed) {
