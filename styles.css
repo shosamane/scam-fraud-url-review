@@ -429,7 +429,7 @@ mark { padding: 0 2px; border-radius: 3px; color: inherit; background: var(--amb
 .selection-label.is-directory { color: #6a6f96; }
 .selection-label.is-host { color: var(--ink); font-weight: 800; font-family: Inter, ui-sans-serif, sans-serif; }
 .selection-label:not(.is-directory):hover { color: var(--teal); text-decoration: underline; }
-.pane-notes-button, .pane-remove-button {
+.pane-notes-button, .pane-remove-button, .pane-restore-button {
   flex: 0 0 auto;
   min-height: 22px;
   padding: 3px 7px;
@@ -438,12 +438,17 @@ mark { padding: 0 2px; border-radius: 3px; color: inherit; background: var(--amb
   opacity: 0.72;
 }
 .selection-node-row:hover .pane-notes-button,
-.selection-node-row:hover .pane-remove-button { opacity: 1; }
+.selection-node-row:hover .pane-remove-button,
+.selection-node-row:hover .pane-restore-button { opacity: 1; }
 .pane-notes-button { color: #45409f; background: var(--indigo-soft); }
 .pane-notes-button:hover { color: #fff; background: var(--indigo); }
 .pane-notes-button.has-note { opacity: 1; color: #fff; background: var(--indigo); }
 .pane-remove-button { color: #963d4b; background: #f9e3e6; }
 .pane-remove-button:hover { color: #fff; background: var(--rose); }
+.pane-restore-button { opacity: 1; color: var(--teal-dark); background: var(--mint); }
+.pane-restore-button:hover { color: #fff; background: var(--teal); }
+/* Struck rows stay in the pane, shown struck. */
+.selection-node-row.is-review-struck .selection-label { opacity: 0.5; text-decoration: line-through; }
 .selection-tools { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 .selection-tools .review-tools { margin: 0; }
 

@@ -1569,9 +1569,11 @@
       const stack = [rootId];
       while (stack.length) {
         const nodeId = stack.pop();
-        if (reviewStateForNode(nodeId).struck || !nodeVisible(nodeId)) {
+        if (!nodeVisible(nodeId)) {
           continue;
         }
+        // Struck nodes STAY in the pane (shown struck) so they can be restored
+        // and keep their notes — they're just excluded from the copied output.
         include.add(nodeId);
         for (const childId of window.URL_TREE_DATA.nodes[nodeId][NODE_CHILDREN]) {
           stack.push(childId);
@@ -1591,6 +1593,10 @@
     const children = node[NODE_CHILDREN].filter((childId) => include.has(childId));
     const isEndpoint = !isHostRoot && Boolean(filteredVariantCount(nodeId));
     const collapsed = state.paneCollapsed.has(nodeId);
+    const struck = reviewStateForNode(nodeId).struck;
+    if (struck) {
+      row.classList.add("is-review-struck");
+    }
 
     if (children.length) {
       const toggle = document.createElement("button");
@@ -1631,7 +1637,8 @@
     }
     row.append(label);
 
-    if (isEndpoint) {
+    if (!isHostRoot) {
+      // Notes on every node (directories too), not just leaves.
       const url = nodeUrl(nodeId);
       const notesButton = document.createElement("button");
       notesButton.type = "button";
@@ -1644,16 +1651,16 @@
       notesButton.title = hasNote ? "Edit your note" : "Add a note";
       notesButton.addEventListener("click", () => openNotesPanel(nodeId));
       row.append(notesButton);
-    }
-    if (isEndpoint || isSelected(nodeId)) {
+
+      // Remove strikes it (stays here, struck, keeps its note); click again restores.
       const removeButton = document.createElement("button");
       removeButton.type = "button";
-      removeButton.className = "pane-remove-button";
-      removeButton.textContent = "Remove";
-      removeButton.title = isSelected(nodeId)
-        ? "Remove this selected branch"
-        : "Remove this URL from the selection (strikes it)";
-      removeButton.addEventListener("click", () => removeFromSelection(nodeId));
+      removeButton.className = struck ? "pane-restore-button" : "pane-remove-button";
+      removeButton.textContent = struck ? "Restore" : "Remove";
+      removeButton.title = struck
+        ? "Bring this back (unstrike)"
+        : "Remove from the selection — stays here struck, keeps its note";
+      removeButton.addEventListener("click", () => togglePaneStrike(nodeId));
       row.append(removeButton);
     }
 
@@ -1669,13 +1676,22 @@
     return item;
   }
 
-  function removeFromSelection(nodeId) {
-    // A directly-selected node is deselected; a derived leaf is struck (which
-    // excludes it from the selection's subtree) — the chosen "Remove = strike".
-    if (state.selections.has(nodeUrl(nodeId))) {
-      state.selections.delete(nodeUrl(nodeId));
+  function togglePaneStrike(nodeId) {
+    // Pane-only toggle: Remove strikes the node (it stays visible, struck, and
+    // keeps its note); clicking again restores it. Unstrike removes the governing
+    // branch mark — the node's own, or the nearest struck ancestor's.
+    if (reviewStateForNode(nodeId).struck) {
+      let currentId = nodeId;
+      while (currentId !== -1) {
+        const mark = state.marks[nodeUrl(currentId)];
+        if (mark && mark.scope === "branch") {
+          delete state.marks[nodeUrl(currentId)];
+          break;
+        }
+        currentId = window.URL_TREE_DATA.nodes[currentId][NODE_PARENT];
+      }
     } else {
-      strikeBranch(nodeId, "removed from selection");
+      strikeBranch(nodeId, "struck in selection pane");
     }
     persistReviewMarks();
     afterReviewChange();
