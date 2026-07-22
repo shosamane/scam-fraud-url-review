@@ -2,5 +2,6 @@
   { "id": "chase", "label": "Chase" },
   { "id": "bankofamerica", "label": "Bank of America" },
   { "id": "wellsfargo", "label": "Wells Fargo" },
-  { "id": "citi", "label": "Citi" }
+  { "id": "citi", "label": "Citi" },
+  { "id": "usbank", "label": "U.S. Bank" }
 ]
