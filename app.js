@@ -963,19 +963,28 @@
 
   function scrollNodeIntoView(nodeId) {
     // content-visibility:auto estimates the size of off-screen subtrees, so a
-    // single scrollIntoView lands on a guessed (wrong) position and the target
-    // moves once its real content lays out. Scroll a few times across frames:
-    // each pass lays out the content now near the viewport, correcting the
-    // target's position until it settles. Then flash the row so it's easy to spot.
+    // single scrollIntoView lands on a guessed position that shifts as content
+    // lays out — one pass (or a few) isn't enough on a very tall tree. Re-scroll
+    // every frame until the page's scroll position stops changing (converged),
+    // capped at 40 frames, then flash the row so it's easy to spot.
     let attempts = 0;
+    let lastY = null;
+    let stable = 0;
     const step = () => {
       const row = document.querySelector(`#node-${nodeId} > .node-row`);
       if (!row) {
         return;
       }
       row.scrollIntoView({ block: "center", inline: "nearest" }); // instant, so re-measuring is accurate
+      const y = window.scrollY || window.pageYOffset || 0;
+      if (lastY !== null && Math.abs(y - lastY) < 2) {
+        stable += 1;
+      } else {
+        stable = 0;
+      }
+      lastY = y;
       attempts += 1;
-      if (attempts < 5) {
+      if (stable < 3 && attempts < 40) {
         window.requestAnimationFrame(step);
       } else {
         row.classList.add("is-revealed");
@@ -1388,9 +1397,16 @@
         unstrike.textContent = "Unstrike";
         unstrike.addEventListener("click", () => {
           unstrikeGoverningMark(result.nodeId);
-          revealNode(result.nodeId);
         });
         actions.append(unstrike);
+      } else {
+        const strikeBtn = document.createElement("button");
+        strikeBtn.type = "button";
+        strikeBtn.className = "result-strike";
+        strikeBtn.textContent = "Strike";
+        strikeBtn.title = "Mark this path (and everything under it) not relevant — no need to find it in the tree";
+        strikeBtn.addEventListener("click", () => quickStrikeFromResults(result.nodeId));
+        actions.append(strikeBtn);
       }
       const reveal = document.createElement("button");
       reveal.type = "button";
@@ -1426,6 +1442,20 @@
       }
       currentId = window.URL_TREE_DATA.nodes[currentId][NODE_PARENT];
     }
+    persistReviewMarks();
+    afterReviewChange();
+  }
+
+  function quickStrikeFromResults(nodeId) {
+    // One-click strike straight from the results list — no dialog, no need to find
+    // the node in the tree. A manual branch strike, same as the tree's default
+    // (reason "not relevant", no note). Selections are protected, as in the tree.
+    if (hasSelectionAtOrBelow(nodeId)) {
+      window.alert("This path contains a selected node. Remove the selection before striking it.");
+      return;
+    }
+    strikeBranch(nodeId, "");
+    autoStrikeUpFrom(nodeId);
     persistReviewMarks();
     afterReviewChange();
   }
