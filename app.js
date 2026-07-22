@@ -1632,20 +1632,27 @@
     // (e.g. every path under a host whose NAME contains the term) does not stop
     // the cascade; only a live match beneath the parent, a selection, or the host
     // root does. This is the "cascade when matched children all struck" behaviour.
-    if (!state.results.length) {
+    if (!state.allMatchNodeIds.size) {
       return;
     }
-    // Re-check strike state live (not a pre-loop snapshot): an intermediate
-    // matched ancestor struck DURING this cascade must stop counting as a live
-    // match, or the cascade halts one level too low.
+    // Uses the FULL match set (allMatchNodeIds), NOT the 5,000-capped result list:
+    // otherwise a live match past the cap is invisible and the cascade wrongly
+    // strikes a whole branch/host from a single strike (a false negative).
+    // Re-checks strike state live so an intermediate ancestor struck DURING this
+    // cascade stops counting as a live match, or the cascade halts one level low.
     const hasLiveMatchBelow = (nodeId) => {
       const selfUrl = nodeUrl(nodeId);
       const prefix = selfUrl.endsWith("/") ? selfUrl : `${selfUrl}/`;
-      return state.results.some((result) =>
-        result.url !== selfUrl
-        && result.url.startsWith(prefix)
-        && !reviewStateForNode(result.nodeId).struck
-      );
+      for (const matchId of state.allMatchNodeIds) {
+        if (matchId === nodeId) {
+          continue;
+        }
+        const matchUrl = nodeUrl(matchId);
+        if (matchUrl.startsWith(prefix) && !reviewStateForNode(matchId).struck) {
+          return true;
+        }
+      }
+      return false;
     };
     let changed = false;
     let currentId = window.URL_TREE_DATA.nodes[struckNodeId][NODE_PARENT];
