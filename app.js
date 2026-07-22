@@ -63,6 +63,7 @@
     activeNoteUrl: null,
     noteTimer: null,
     matchNodeIds: new Set(),
+    allMatchNodeIds: new Set(), // EVERY match, uncapped — drives highlights & host-match
     pathNodeIds: new Set(),
     pathHostIds: new Set(),
     matchHostIds: new Set(),
@@ -293,6 +294,26 @@
     return sourceConfig[state.source];
   }
 
+  // Auto-strikes (host "no keyword match", cascade "matched descendants all
+  // struck") are DERIVED from the current keywords — recomputed on every search.
+  // They must never be saved: a saved one goes stale when the data or keywords
+  // change (e.g. a host that had 0 paths later gains real pages) and silently
+  // hides content — a false negative. So they are stripped at every save/load
+  // boundary and only ever live in memory for the current search.
+  const AUTO_NOTE_PREFIX = "auto:";
+  function isAutoMark(mark) {
+    return Boolean(mark && typeof mark.note === "string" && mark.note.startsWith(AUTO_NOTE_PREFIX));
+  }
+  function manualMarks(marks) {
+    const out = {};
+    for (const url of Object.keys(marks || {})) {
+      if (!isAutoMark(marks[url])) {
+        out[url] = marks[url];
+      }
+    }
+    return out;
+  }
+
   function loadReviewMarks() {
     try {
       const saved = window.localStorage.getItem(REVIEW_STORAGE_KEY);
@@ -301,7 +322,7 @@
       }
       const parsed = JSON.parse(saved);
       if (parsed && (parsed.version === 1 || parsed.version === 2) && parsed.marks && typeof parsed.marks === "object") {
-        state.marks = parsed.marks;
+        state.marks = manualMarks(parsed.marks);
       }
       if (parsed && parsed.version === 2 && Array.isArray(parsed.selections)) {
         state.selections = new Set(parsed.selections);
@@ -321,7 +342,7 @@
         REVIEW_STORAGE_KEY,
         JSON.stringify({
           version: 2,
-          marks: state.marks,
+          marks: manualMarks(state.marks), // never cache derived auto-strikes
           selections: [...state.selections],
           notes: state.notes,
         })
@@ -339,10 +360,11 @@
     updateReviewSummary();
   }
 
-  // Shared across reviewers: strike marks + selections.
+  // Shared across reviewers: strike marks + selections. Auto-strikes are derived,
+  // never shared — only the reviewers' real (manual) strikes persist.
   function sharedBody() {
     return {
-      marks: state.marks,
+      marks: manualMarks(state.marks),
       selections: [...state.selections],
     };
   }
@@ -884,8 +906,10 @@
     // A result node is a real per-segment match, so it gets the match (rose)
     // highlight; only its ANCESTORS get the path (amber) highlight. Descendants of
     // a match are never highlighted here — they light up only if their own segment
-    // matches, in which case they are their own result.
-    const uniqueMatches = new Set(state.results.map((result) => result.nodeId));
+    // matches, in which case they are their own result. Iterate EVERY match (not
+    // the capped result list), so highlights and host-match detection — which
+    // drives auto host-strikes — never blank out for matches past the cap.
+    const uniqueMatches = state.allMatchNodeIds;
     for (const nodeId of uniqueMatches) {
       state.matchNodeIds.add(nodeId);
       const hostIndex = hostIndexForNode(nodeId);
@@ -904,8 +928,7 @@
   }
 
   function autoExpandSearchMatches() {
-    const uniqueMatches = [...new Set(state.results.map((result) => result.nodeId))]
-      .slice(0, AUTO_EXPAND_MATCH_LIMIT);
+    const uniqueMatches = [...state.allMatchNodeIds].slice(0, AUTO_EXPAND_MATCH_LIMIT);
     state.expandedHosts.clear();
     state.expandedNodes.clear();
     for (const nodeId of uniqueMatches) {
@@ -976,6 +999,7 @@
 
     state.results = [];
     state.totalMatches = 0;
+    state.allMatchNodeIds.clear();
     state.page = 0;
     state.onlyStruck = false;
     state.searchTerms = terms;
@@ -1002,6 +1026,7 @@
         continue;
       }
       state.totalMatches += 1;
+      state.allMatchNodeIds.add(nodeId); // uncapped: highlights & host-match must see every match
       if (state.results.length < STORED_RESULT_LIMIT) {
         state.results.push({ nodeId, url: nodeUrl(nodeId) });
       }
@@ -1353,6 +1378,7 @@
     elements.searchInput.value = "";
     state.results = [];
     state.totalMatches = 0;
+    state.allMatchNodeIds.clear();
     state.searchTerms = [];
     state.page = 0;
     state.onlyStruck = false;
@@ -2307,8 +2333,13 @@
     const localShared = Object.keys(state.marks).length > 0 || state.selections.size > 0;
     const localNotes = Object.keys(state.notes).length > 0;
 
+    // If the shared record still carries stale auto-strikes (saved by older code),
+    // drop them on adopt so they can't hide content, and push the cleaned set once.
+    const rawServerMarks = server.marks && typeof server.marks === "object" ? server.marks : {};
+    const cleanedServerMarks = manualMarks(rawServerMarks);
+    const hadStaleAutos = Object.keys(rawServerMarks).length !== Object.keys(cleanedServerMarks).length;
     if (serverShared) {
-      state.marks = server.marks && typeof server.marks === "object" ? server.marks : {};
+      state.marks = cleanedServerMarks;
       state.selections = new Set(Array.isArray(server.selections) ? server.selections : []);
     }
     if (serverNotes) {
@@ -2348,6 +2379,8 @@
     // channel independently so an empty shared record doesn't wait on notes.
     if (!serverShared && localShared) {
       SYNC.pushShared(sharedBody);
+    } else if (serverShared && hadStaleAutos) {
+      SYNC.pushShared(sharedBody); // scrub the stale auto-strikes out of the DB once
     }
     if (!serverNotes && localNotes) {
       SYNC.pushNotes(notesBody);

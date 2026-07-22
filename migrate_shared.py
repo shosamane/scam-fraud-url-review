@@ -62,12 +62,23 @@ def read_per_user(store: ReviewStore, institution: str) -> dict:
     }
 
 
+def _is_auto(mark: dict) -> bool:
+    """Derived auto-strikes (host 'no keyword match', cascade) are recomputed by
+    the app each search and must never be seeded into the shared record — a saved
+    one goes stale and hides content."""
+    note = mark.get("note") if isinstance(mark, dict) else None
+    return isinstance(note, str) and note.startswith("auto:")
+
+
 def merge(sources: list[dict]) -> dict:
-    """Union marks (newer updated_at wins) + selections, then selection wins."""
+    """Union marks (newer updated_at wins) + selections, then selection wins.
+    Derived auto-strikes are dropped."""
     marks: dict = {}
     selections: set[str] = set()
     for src in sources:
         for url, mark in (src.get("marks") or {}).items():
+            if _is_auto(mark):
+                continue
             existing = marks.get(url)
             if existing is None or str(mark.get("updatedAt", "")) >= str(existing.get("updatedAt", "")):
                 marks[url] = mark
