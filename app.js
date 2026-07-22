@@ -958,8 +958,31 @@
       }
     }
 
-    const targetRow = document.querySelector(`#node-${nodeId} > .node-row`);
-    targetRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrollNodeIntoView(nodeId);
+  }
+
+  function scrollNodeIntoView(nodeId) {
+    // content-visibility:auto estimates the size of off-screen subtrees, so a
+    // single scrollIntoView lands on a guessed (wrong) position and the target
+    // moves once its real content lays out. Scroll a few times across frames:
+    // each pass lays out the content now near the viewport, correcting the
+    // target's position until it settles. Then flash the row so it's easy to spot.
+    let attempts = 0;
+    const step = () => {
+      const row = document.querySelector(`#node-${nodeId} > .node-row`);
+      if (!row) {
+        return;
+      }
+      row.scrollIntoView({ block: "center", inline: "nearest" }); // instant, so re-measuring is accurate
+      attempts += 1;
+      if (attempts < 5) {
+        window.requestAnimationFrame(step);
+      } else {
+        row.classList.add("is-revealed");
+        window.setTimeout(() => row.classList.remove("is-revealed"), 1600);
+      }
+    };
+    window.requestAnimationFrame(step);
   }
 
   function parseTerms() {

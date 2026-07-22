@@ -324,10 +324,17 @@ mark { padding: 0 2px; border-radius: 3px; color: inherit; background: var(--amb
 .node-list { position: relative; margin: 0; padding: 0 0 0 23px; list-style: none; }
 .node-list::before { content: ""; position: absolute; top: 0; bottom: 8px; left: 8px; border-left: 1px solid #d8e1e4; }
 .tree-node { position: relative; }
-.node-row { position: relative; display: flex; align-items: center; gap: 5px; min-height: 32px; margin: 2px 0; padding: 3px 7px 3px 0; border-radius: 8px; }
+.node-row { position: relative; display: flex; align-items: center; gap: 5px; min-height: 32px; margin: 2px 0; padding: 3px 7px 3px 0; border-radius: 8px; scroll-margin: 96px 0; }
 .node-row::before { content: ""; position: absolute; left: -15px; width: 13px; border-top: 1px solid #d8e1e4; }
 .node-row.is-path-highlight { background: var(--amber-soft); box-shadow: inset 4px 0 var(--amber); }
 .node-row.is-match-highlight { background: #ffe2e6; box-shadow: inset 4px 0 var(--rose); }
+/* Reveal target flash — makes the jumped-to node easy to spot. */
+.node-row.is-revealed { animation: reveal-flash 1.6s ease; }
+@keyframes reveal-flash {
+  0%, 40% { background: var(--teal); box-shadow: inset 4px 0 var(--teal-dark), 0 0 0 2px var(--teal); }
+  100% { background: transparent; box-shadow: none; }
+}
+.node-row.is-revealed .node-link { color: #0d3b3a; }
 .node-row.is-review-struck .node-link { opacity: 0.5; text-decoration: line-through; text-decoration-thickness: 1.5px; }
 .node-toggle { width: 24px; height: 24px; border-radius: 7px; font-size: 11px; }
 .node-spacer { flex: 0 0 24px; }
