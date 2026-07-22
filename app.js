@@ -49,6 +49,7 @@
     results: [],
     totalMatches: 0,
     page: 0,
+    onlyStruck: false,
     searchTerms: [],
     matchMode: "partial",
     hideConfirmedNotFound: true,
@@ -935,6 +936,7 @@
     state.results = [];
     state.totalMatches = 0;
     state.page = 0;
+    state.onlyStruck = false;
     state.searchTerms = terms;
     state.matchMode = elements.matchMode.value;
     const logic = elements.termLogic.value;
@@ -1090,13 +1092,50 @@
       return;
     }
 
+    // Surface-for-review: struck paths that STILL match the current keywords.
+    // Nothing is auto-unstruck — we only flag them so a newly added keyword
+    // can't silently hide content behind an earlier strike.
+    const struckResults = state.results.filter((result) => reviewStateForNode(result.nodeId).struck);
+    const struckCount = struckResults.length;
+    if (state.onlyStruck && struckCount === 0) {
+      state.onlyStruck = false; // nothing left to review → drop back to all matches
+    }
+    const visible = state.onlyStruck ? struckResults : state.results;
+
     const storedNotice = state.totalMatches > state.results.length
       ? ` · first ${formatNumber(state.results.length)} available`
       : "";
-    elements.resultCount.textContent = `${formatNumber(state.totalMatches)} matches${storedNotice}`;
+    const struckNotice = struckCount ? ` · ${formatNumber(struckCount)} struck` : "";
+    elements.resultCount.textContent =
+      `${formatNumber(state.totalMatches)} matches${storedNotice}${struckNotice}`;
+
+    if (struckCount) {
+      const banner = document.createElement("div");
+      banner.className = "struck-review-banner";
+      const text = document.createElement("span");
+      text.textContent = state.onlyStruck
+        ? `Showing ${formatNumber(struckCount)} struck path${struckCount === 1 ? "" : "s"} that still match — unstrike anything relevant.`
+        : `${formatNumber(struckCount)} struck path${struckCount === 1 ? "" : "s"} also match these keywords.`;
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "struck-review-toggle";
+      toggle.textContent = state.onlyStruck ? "Show all matches" : "Review struck";
+      toggle.addEventListener("click", () => {
+        state.onlyStruck = !state.onlyStruck;
+        state.page = 0;
+        renderResults();
+      });
+      banner.append(text, toggle);
+      elements.results.append(banner);
+    }
+
+    const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+    if (state.page >= pages) {
+      state.page = pages - 1; // filter shrank the list past the current page
+    }
     const start = state.page * PAGE_SIZE;
-    const end = Math.min(start + PAGE_SIZE, state.results.length);
-    for (const result of state.results.slice(start, end)) {
+    const end = Math.min(start + PAGE_SIZE, visible.length);
+    for (const result of visible.slice(start, end)) {
       const card = document.createElement("article");
       card.className = "result-card";
       const review = reviewStateForNode(result.nodeId);
@@ -1112,8 +1151,17 @@
       if (review.struck) {
         const reviewStatus = document.createElement("span");
         reviewStatus.className = "result-review-status";
-        reviewStatus.textContent = reasonLabel(review.governing.reason);
+        reviewStatus.textContent = review.governing.note || reasonLabel(review.governing.reason);
         actions.append(reviewStatus);
+        const unstrike = document.createElement("button");
+        unstrike.type = "button";
+        unstrike.className = "result-unstrike";
+        unstrike.textContent = "Unstrike";
+        unstrike.addEventListener("click", () => {
+          unstrikeGoverningMark(result.nodeId);
+          revealNode(result.nodeId);
+        });
+        actions.append(unstrike);
       }
       const reveal = document.createElement("button");
       reveal.type = "button";
@@ -1129,11 +1177,28 @@
       elements.results.append(card);
     }
 
-    const pages = Math.ceil(state.results.length / PAGE_SIZE);
     elements.pagination.hidden = pages <= 1;
     elements.pageStatus.textContent = `Page ${state.page + 1} of ${pages}`;
     elements.previousPage.disabled = state.page === 0;
     elements.nextPage.disabled = state.page >= pages - 1;
+  }
+
+  function unstrikeGoverningMark(nodeId) {
+    // "I reviewed this struck-but-matching path, keep it." Free the node by
+    // removing EVERY branch mark along its spine to the root — not just the
+    // nearest one. A single leaf strike can trigger a cascade strike on its
+    // ancestors (up to the host), so stopping at the first mark would leave the
+    // node struck by a higher one. This mirrors carveOutStrikes' spine clear.
+    let currentId = nodeId;
+    while (currentId !== -1) {
+      const mark = state.marks[nodeUrl(currentId)];
+      if (mark && mark.scope === "branch") {
+        delete state.marks[nodeUrl(currentId)];
+      }
+      currentId = window.URL_TREE_DATA.nodes[currentId][NODE_PARENT];
+    }
+    persistReviewMarks();
+    afterReviewChange();
   }
 
   function clearSearch() {
@@ -1142,6 +1207,7 @@
     state.totalMatches = 0;
     state.searchTerms = [];
     state.page = 0;
+    state.onlyStruck = false;
     clearSearchHighlights();
     elements.resultCount.textContent = "No search yet";
     elements.results.innerHTML = '<div class="empty-state">Search results will appear here.</div>';
