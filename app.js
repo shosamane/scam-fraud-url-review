@@ -1254,8 +1254,16 @@
       ? state.results.filter((result) => result.url.toLowerCase().includes(filter))
       : state.results;
 
-    const reviewResults = base.filter((result) => newKeywordsForStruckNode(result.nodeId).length > 0);
+    // "To review" = struck paths matching a keyword added since they were struck.
+    // Compute it over ALL matches first, then scope to the filter, so we can warn
+    // when a filter is hiding some — a filter must never silently mask a would-be
+    // review (the no-false-negatives guard).
+    const fullReview = state.results.filter((result) => newKeywordsForStruckNode(result.nodeId).length > 0);
+    const reviewResults = filter
+      ? fullReview.filter((result) => result.url.toLowerCase().includes(filter))
+      : fullReview;
     const reviewCount = reviewResults.length;
+    const hiddenReview = fullReview.length - reviewCount; // to-review paths outside the filter
     if (state.onlyStruck && reviewCount === 0) {
       state.onlyStruck = false; // nothing left to review → drop back to all matches
     }
@@ -1264,7 +1272,16 @@
     const storedNotice = state.totalMatches > state.results.length
       ? ` · first ${formatNumber(state.results.length)} available`
       : "";
-    const reviewNotice = reviewCount ? ` · ${formatNumber(reviewCount)} to review` : "";
+    let reviewNotice = "";
+    if (reviewCount) {
+      reviewNotice = ` · ${formatNumber(reviewCount)} to review`;
+      if (filter && hiddenReview > 0) {
+        reviewNotice += ` (+${formatNumber(hiddenReview)} outside filter)`;
+      }
+    } else if (filter && hiddenReview > 0) {
+      // The filter hides EVERY to-review path — the dangerous case: still flag it.
+      reviewNotice = ` · ${formatNumber(hiddenReview)} to review outside this filter`;
+    }
     elements.resultCount.textContent = filter
       ? `${formatNumber(base.length)} of ${formatNumber(state.totalMatches)} matches contain “${filter}”${storedNotice}${reviewNotice}`
       : `${formatNumber(state.totalMatches)} matches${storedNotice}${reviewNotice}`;
