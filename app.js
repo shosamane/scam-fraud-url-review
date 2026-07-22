@@ -979,20 +979,31 @@
     }
   }
 
+  const HOST_NOMATCH_NOTE = "auto: no keyword match on host";
+
   function strikeHostsWithoutMatches() {
-    // Strike every host that has no keyword match for the current terms, so the
-    // tree narrows to the hosts relevant to this search. Hosts guarding a
-    // selection are left untouched.
+    // Strike hosts with no keyword match for the current terms, AND lift the auto
+    // "no-match" strike from hosts that DO match now. Re-evaluated every committed
+    // search (not cumulative), so a host struck in an earlier search reappears the
+    // moment a later search matches it. Manual/cascade strikes are left untouched
+    // (only marks carrying HOST_NOMATCH_NOTE are auto-managed here).
     let changed = false;
     for (let hostIndex = 0; hostIndex < window.URL_TREE_DATA.hosts.length; hostIndex += 1) {
-      if (state.pathHostIds.has(hostIndex) || state.matchHostIds.has(hostIndex)) {
+      const rootId = window.URL_TREE_DATA.hosts[hostIndex][HOST_ROOT];
+      const rootUrl = nodeUrl(rootId);
+      const matches = state.pathHostIds.has(hostIndex) || state.matchHostIds.has(hostIndex);
+      if (matches) {
+        const mark = state.marks[rootUrl];
+        if (mark && mark.note === HOST_NOMATCH_NOTE) {
+          delete state.marks[rootUrl]; // it matches now → lift the auto strike
+          changed = true;
+        }
         continue;
       }
-      const rootId = window.URL_TREE_DATA.hosts[hostIndex][HOST_ROOT];
       if (hasSelectionAtOrBelow(rootId)) {
         continue;
       }
-      changed = strikeBranch(rootId, "auto: no keyword match on host") || changed;
+      changed = strikeBranch(rootId, HOST_NOMATCH_NOTE) || changed;
     }
     if (changed) {
       persistReviewMarks();
