@@ -2,10 +2,19 @@
 
 Data model
 ----------
-- Per (institution, user): the manual strike ``marks`` and ``selections``.
-  Aziz and Sudhamshu each have their own private annotations.
-- Per institution: the shared keyword ``search`` list. When one user edits the
-  keywords, everyone on that institution sees them.
+- Per institution (SHARED across reviewers): the strike ``marks``, the
+  ``selections``, and the keyword ``search`` list. When either reviewer strikes,
+  selects, or edits keywords, both see the same shared document.
+- Per (institution, user) (PRIVATE): the reviewer's own ``notes`` on URLs. Notes
+  are the only thing that differs between Aziz and Sudhamshu.
+
+Concurrency
+-----------
+The shared document is written whole-record, last-writer-wins: each save
+overwrites ``marks``/``selections`` for the institution. Reviewers see each
+other's shared changes on load (there is no live polling for the shared list), so
+a genuinely simultaneous edit resolves to whichever save lands last. Note saves
+go to a separate per-user row and can never clobber the shared list.
 
 Durability
 ----------
@@ -54,6 +63,9 @@ class ReviewStore:
 
     def _ensure_schema(self) -> None:
         with self._init_lock, self._connect() as conn:
+            # Per-user row. Historically held marks/selections too; those columns
+            # are kept for the one-time migration but are no longer read after the
+            # shared table is populated. Going forward only ``notes`` is per-user.
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS annotations (
@@ -68,13 +80,24 @@ class ReviewStore:
                 )
                 """
             )
-            # Migration: add the notes column to databases created before notes
-            # existed (preserves existing rows).
             have = [r["name"] for r in conn.execute("PRAGMA table_info(annotations)")]
             if "notes" not in have:
                 conn.execute(
                     "ALTER TABLE annotations ADD COLUMN notes TEXT NOT NULL DEFAULT '{}'"
                 )
+            # Shared strike marks + selections, one row per institution.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS shared (
+                    institution TEXT PRIMARY KEY,
+                    marks       TEXT NOT NULL DEFAULT '{}',
+                    selections  TEXT NOT NULL DEFAULT '[]',
+                    version     INTEGER NOT NULL DEFAULT 0,
+                    updated_at  TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            # Shared keyword list, one row per institution.
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS keywords (
@@ -98,61 +121,111 @@ class ReviewStore:
             return {"search": {}, "version": 0}
         return {"search": json.loads(row["search"]), "version": row["version"]}
 
-    def get_state(self, institution: str, user: str) -> dict:
+    def get_shared(self, institution: str) -> dict:
         with self._connect() as conn:
-            ann = conn.execute(
-                "SELECT marks, selections, notes, version, updated_at "
+            row = conn.execute(
+                "SELECT marks, selections, version, updated_at "
+                "FROM shared WHERE institution = ?",
+                (institution,),
+            ).fetchone()
+        if row is None:
+            return {"marks": {}, "selections": [], "version": 0, "updatedAt": ""}
+        return {
+            "marks": json.loads(row["marks"]),
+            "selections": json.loads(row["selections"]),
+            "version": row["version"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def get_notes(self, institution: str, user: str) -> dict:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT notes, version, updated_at "
                 "FROM annotations WHERE institution = ? AND user = ?",
                 (institution, user),
             ).fetchone()
-            kw = conn.execute(
-                "SELECT search FROM keywords WHERE institution = ?", (institution,)
-            ).fetchone()
+        if row is None:
+            return {"notes": {}, "version": 0, "updatedAt": ""}
         return {
-            "marks": json.loads(ann["marks"]) if ann else {},
-            "selections": json.loads(ann["selections"]) if ann else [],
-            "notes": json.loads(ann["notes"]) if ann else {},
-            "search": json.loads(kw["search"]) if kw else {},
-            "version": ann["version"] if ann else 0,
-            "updatedAt": ann["updated_at"] if ann else "",
+            "notes": json.loads(row["notes"]),
+            "version": row["version"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def get_state(self, institution: str, user: str) -> dict:
+        """Composite document for the client's initial load: shared marks +
+        selections, the user's private notes, and the shared keyword list."""
+        shared = self.get_shared(institution)
+        notes = self.get_notes(institution, user)
+        kw = self.get_keywords(institution)
+        return {
+            "marks": shared["marks"],
+            "selections": shared["selections"],
+            "notes": notes["notes"],
+            "search": kw["search"],
+            "version": notes["version"],          # per-user (notes) version
+            "sharedVersion": shared["version"],   # shared (marks/selections) version
+            "updatedAt": shared["updatedAt"],
         }
 
     # -- writes --------------------------------------------------------------
 
-    def put_state(self, institution: str, user: str, marks: dict,
-                  selections: list, search: dict, notes: dict | None = None) -> dict:
+    def put_shared(self, institution: str, marks: dict, selections: list) -> dict:
         if not isinstance(marks, dict):
             raise ValueError("marks must be an object")
         if not isinstance(selections, list):
             raise ValueError("selections must be an array")
-        if not isinstance(search, dict):
-            raise ValueError("search must be an object")
-        if notes is None:
-            notes = {}
+        now = _now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO shared (institution, marks, selections, version, updated_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(institution) DO UPDATE SET
+                    marks=excluded.marks,
+                    selections=excluded.selections,
+                    version=shared.version + 1,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    institution,
+                    json.dumps(marks, separators=(",", ":")),
+                    json.dumps(selections, separators=(",", ":")),
+                    now,
+                ),
+            )
+            version = conn.execute(
+                "SELECT version FROM shared WHERE institution = ?", (institution,)
+            ).fetchone()["version"]
+        return {"version": version, "updatedAt": now}
+
+    def put_notes(self, institution: str, user: str, notes: dict) -> dict:
         if not isinstance(notes, dict):
             raise ValueError("notes must be an object")
         now = _now()
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO annotations (institution, user, marks, selections, notes, version, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?)
+                INSERT INTO annotations (institution, user, notes, version, updated_at)
+                VALUES (?, ?, ?, 1, ?)
                 ON CONFLICT(institution, user) DO UPDATE SET
-                    marks=excluded.marks,
-                    selections=excluded.selections,
                     notes=excluded.notes,
                     version=annotations.version + 1,
                     updated_at=excluded.updated_at
                 """,
-                (
-                    institution, user,
-                    json.dumps(marks, separators=(",", ":")),
-                    json.dumps(selections, separators=(",", ":")),
-                    json.dumps(notes, separators=(",", ":")),
-                    now,
-                ),
+                (institution, user, json.dumps(notes, separators=(",", ":")), now),
             )
-            # Shared keyword list for the institution.
+            version = conn.execute(
+                "SELECT version FROM annotations WHERE institution = ? AND user = ?",
+                (institution, user),
+            ).fetchone()["version"]
+        return {"version": version, "updatedAt": now}
+
+    def put_keywords(self, institution: str, search: dict) -> dict:
+        if not isinstance(search, dict):
+            raise ValueError("search must be an object")
+        now = _now()
+        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO keywords (institution, search, version, updated_at)
@@ -165,8 +238,7 @@ class ReviewStore:
                 (institution, json.dumps(search, separators=(",", ":")), now),
             )
             version = conn.execute(
-                "SELECT version FROM annotations WHERE institution = ? AND user = ?",
-                (institution, user),
+                "SELECT version FROM keywords WHERE institution = ?", (institution,)
             ).fetchone()["version"]
         return {"version": version, "updatedAt": now}
 

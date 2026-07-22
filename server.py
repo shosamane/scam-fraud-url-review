@@ -1,10 +1,11 @@
 """FastAPI server for the URL tree explorer.
 
-Serves the static app and a small JSON API backed by SQLite. Two users
-(Aziz, Sudhamshu) keep private annotations per institution; the keyword list is
-shared per institution. An institution dropdown lets you pick which dataset to
-review; add ``data/tree-<id>.js`` + an entry in ``data/institutions.json`` and it
-shows up automatically.
+Serves the static app and a small JSON API backed by SQLite. The strike
+``marks``, ``selections`` and keyword ``search`` list are SHARED across reviewers
+per institution; each reviewer's ``notes`` are PRIVATE per (institution, user).
+An institution dropdown lets you pick which dataset to review; add
+``data/tree-<id>.js`` + an entry in ``data/institutions.json`` and it shows up
+automatically.
 
 Reverse proxy
 -------------
@@ -21,8 +22,10 @@ Locally (no proxy) just run without BASE_PATH and open http://localhost:9070/ .
 API (all under BASE_PATH):
     GET  /api/institutions                          -> [{id, label}]
     GET  /api/keywords?institution=chase            -> {search, version}
-    GET  /api/state?institution=chase&user=aziz     -> {marks, selections, search, version}
-    PUT  /api/state?institution=chase&user=aziz     body {marks, selections, search}
+    PUT  /api/keywords?institution=chase            body {search}
+    GET  /api/state?institution=chase&user=aziz     -> {marks, selections, notes, search, ...}
+    PUT  /api/shared?institution=chase              body {marks, selections}   (shared)
+    PUT  /api/notes?institution=chase&user=aziz     body {notes}               (private)
     GET  /api/health
 """
 
@@ -71,11 +74,17 @@ app = FastAPI(title="URL Tree Review")
 api = APIRouter()
 
 
-class StateBody(BaseModel):
+class SharedBody(BaseModel):
     marks: Dict[str, Any] = {}
     selections: List[str] = []
-    search: Dict[str, Any] = {}
+
+
+class NotesBody(BaseModel):
     notes: Dict[str, str] = {}
+
+
+class KeywordsBody(BaseModel):
+    search: Dict[str, Any] = {}
 
 
 def _institutions() -> List[dict]:
@@ -118,16 +127,26 @@ def get_keywords(institution: str = "chase") -> dict:
     return store.get_keywords(institution)
 
 
+@api.put("/keywords")
+def put_keywords(body: KeywordsBody, institution: str = "chase") -> dict:
+    return store.put_keywords(institution, body.search)
+
+
 @api.get("/state")
 def get_state(institution: str = "chase", user: str = "sudhamshu") -> dict:
     return store.get_state(institution, _valid_user(user))
 
 
-@api.put("/state")
-def put_state(body: StateBody, institution: str = "chase", user: str = "sudhamshu") -> dict:
-    return store.put_state(
-        institution, _valid_user(user), body.marks, body.selections, body.search, body.notes
-    )
+@api.put("/shared")
+def put_shared(body: SharedBody, institution: str = "chase") -> dict:
+    # Shared across reviewers, whole-record last-writer-wins.
+    return store.put_shared(institution, body.marks, body.selections)
+
+
+@api.put("/notes")
+def put_notes(body: NotesBody, institution: str = "chase", user: str = "sudhamshu") -> dict:
+    # Private to each reviewer.
+    return store.put_notes(institution, _valid_user(user), body.notes)
 
 
 app.include_router(api, prefix=f"{BASE_PATH}/api")

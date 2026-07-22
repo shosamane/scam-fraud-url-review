@@ -136,7 +136,9 @@ select:focus-visible {
 }
 
 .app-shell.has-selection-pane {
-  grid-template-columns: minmax(300px, 360px) 1fr minmax(290px, 350px);
+  /* Narrower middle tree, roomier selection pane so subtrees/URLs read on one
+     line instead of wrapping vertically. */
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(400px, 480px);
 }
 
 .search-panel,
@@ -434,7 +436,11 @@ mark { padding: 0 2px; border-radius: 3px; color: inherit; background: var(--amb
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   text-decoration: none;
-  overflow-wrap: anywhere;
+  /* Segments are capped to 20 chars in JS; keep them on one line (full path on
+     hover) so wide names never stack vertically. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .selection-label.is-directory { color: #6a6f96; }
 .selection-label.is-host { color: var(--ink); font-weight: 800; font-family: Inter, ui-sans-serif, sans-serif; }

@@ -74,12 +74,20 @@
   // Server sync. Same-origin JSON API served by server.py. Degrades silently to
   // localStorage-only when there is no server (e.g. the page opened as file://).
   const SYNC = (() => {
-    let timer = null;
-    let pendingBody = null;
     let reachable = false;
+    // Independent debounced channels so a note save (private) can never overwrite
+    // the shared marks/selections, and vice-versa. Each channel has its own
+    // endpoint, pending body builder, timer, and completion callbacks.
+    const channels = Object.create(null);
+    const enc = encodeURIComponent;
     function stateUrl() {
-      return `api/state?institution=${encodeURIComponent(INSTITUTION)}&user=${encodeURIComponent(USER)}`;
+      return `api/state?institution=${enc(INSTITUTION)}&user=${enc(USER)}`;
     }
+    const CHANNEL_URLS = {
+      shared: () => `api/shared?institution=${enc(INSTITUTION)}`,
+      notes: () => `api/notes?institution=${enc(INSTITUTION)}&user=${enc(USER)}`,
+      keywords: () => `api/keywords?institution=${enc(INSTITUTION)}`,
+    };
     async function load() {
       try {
         const response = await fetch(stateUrl(), { cache: "no-store" });
@@ -95,7 +103,7 @@
     async function loadKeywords() {
       try {
         const response = await fetch(
-          `api/keywords?institution=${encodeURIComponent(INSTITUTION)}`,
+          `api/keywords?institution=${enc(INSTITUTION)}`,
           { cache: "no-store" }
         );
         if (!response.ok) {
@@ -117,23 +125,30 @@
         return null;
       }
     }
-    let pendingCallbacks = [];
-    async function flush() {
-      timer = null;
-      if (!pendingBody) {
+    async function flushChannel(name, keepalive) {
+      const ch = channels[name];
+      if (!ch) {
         return;
       }
-      const body = pendingBody();
-      const callbacks = pendingCallbacks;
-      pendingBody = null;
-      pendingCallbacks = [];
+      ch.timer = null;
+      if (!ch.body) {
+        return;
+      }
+      const body = ch.body();
+      const callbacks = ch.cbs;
+      ch.body = null;
+      ch.cbs = [];
       let ok = false;
       try {
-        const response = await fetch(stateUrl(), {
+        const options = {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
-        });
+        };
+        if (keepalive) {
+          options.keepalive = true; // best-effort send during page unload
+        }
+        const response = await fetch(CHANNEL_URLS[name](), options);
         reachable = response.ok;
         ok = response.ok;
       } catch (error) {
@@ -143,25 +158,40 @@
         cb(ok);
       }
     }
-    // onDone(ok) fires once the next flush to the server completes (used by the
+    // onDone(ok) fires once this channel's next flush completes (used by the
     // notes editor to show a Saved / not-saved label). Coalesced pushes all fire.
-    function push(getBody, onDone) {
+    function push(name, getBody, onDone) {
       if (!reachable) {
         if (onDone) {
           onDone(false); // localStorage only this session
         }
         return;
       }
-      pendingBody = getBody;
+      const ch = channels[name] || (channels[name] = { timer: null, body: null, cbs: [] });
+      ch.body = getBody;
       if (onDone) {
-        pendingCallbacks.push(onDone);
+        ch.cbs.push(onDone);
       }
-      if (!timer) {
-        timer = window.setTimeout(flush, 700);
+      if (!ch.timer) {
+        ch.timer = window.setTimeout(() => flushChannel(name, false), 700);
+      }
+    }
+    function flushAll() {
+      // On tab close: fire any pending channel immediately (keepalive) so the
+      // last sub-debounce change is not lost.
+      for (const name of Object.keys(channels)) {
+        const ch = channels[name];
+        if (ch && ch.timer) {
+          window.clearTimeout(ch.timer);
+          flushChannel(name, true);
+        }
       }
     }
     return {
-      load, loadKeywords, loadInstitutions, push,
+      load, loadKeywords, loadInstitutions, flushAll,
+      pushShared: (getBody, onDone) => push("shared", getBody, onDone),
+      pushNotes: (getBody, onDone) => push("notes", getBody, onDone),
+      pushKeywords: (getBody, onDone) => push("keywords", getBody, onDone),
       get reachable() { return reachable; },
     };
   })();
@@ -304,16 +334,27 @@
   }
 
   function persistReviewMarks() {
-    writeLocalReview();      // offline cache / fallback
-    SYNC.push(syncBody);     // authoritative server copy (debounced)
+    writeLocalReview();          // offline cache / fallback (marks+selections+notes)
+    SYNC.pushShared(sharedBody); // marks + selections are shared (debounced)
     updateReviewSummary();
   }
 
-  function syncBody() {
+  // Shared across reviewers: strike marks + selections.
+  function sharedBody() {
     return {
       marks: state.marks,
       selections: [...state.selections],
-      notes: state.notes,
+    };
+  }
+
+  // Private to this reviewer: notes.
+  function notesBody() {
+    return { notes: state.notes };
+  }
+
+  // Shared across reviewers: the keyword/search list.
+  function keywordsBody() {
+    return {
       search: {
         terms: elements.searchInput ? elements.searchInput.value : "",
         matchMode: elements.matchMode ? elements.matchMode.value : "partial",
@@ -1023,7 +1064,7 @@
     } catch (error) {
       /* storage unavailable — keywords simply won't persist */
     }
-    SYNC.push(syncBody);
+    SYNC.pushKeywords(keywordsBody);
   }
 
   function loadSearchState() {
@@ -1738,20 +1779,24 @@
     );
   }
 
+  function nodeHasNote(url) {
+    return Boolean(state.notes[url] && state.notes[url].trim());
+  }
+
   function collectSelectionInclude() {
-    // Nodes to draw in the pane: for each selected node, its full ancestor chain
-    // (so the host → …/… path hierarchy is shown) plus its non-struck subtree.
-    // Shared ancestors merge, so the pane is one real tree per host.
-    const include = new Set();
+    // Nodes to draw in the pane. A node is "content" if it is under a selection,
+    // visible, and NOT struck — OR it is struck but this reviewer has pinned it
+    // with a note. Remove strikes a node, so a struck-without-note node vanishes
+    // (its whole subtree collapses with it); a note keeps its node on screen so
+    // the note is never lost. Every content node then contributes its ancestor
+    // chain, so the host → …/… hierarchy stays intact and shared ancestors merge
+    // into one real tree per host. A selection whose subtree is entirely removed
+    // (no content, no notes) contributes nothing and disappears.
+    const content = new Set();
     for (const selUrl of state.selections) {
       const rootId = findNodeIdByUrl(selUrl);
       if (rootId === null) {
         continue;
-      }
-      let ancestor = rootId;
-      while (ancestor !== -1) {
-        include.add(ancestor);
-        ancestor = window.URL_TREE_DATA.nodes[ancestor][NODE_PARENT];
       }
       const stack = [rootId];
       while (stack.length) {
@@ -1759,12 +1804,23 @@
         if (!nodeVisible(nodeId)) {
           continue;
         }
-        // Struck nodes STAY in the pane (shown struck) so they can be restored
-        // and keep their notes — they're just excluded from the copied output.
-        include.add(nodeId);
+        const struck = reviewStateForNode(nodeId).struck;
+        if (!struck || nodeHasNote(nodeUrl(nodeId))) {
+          content.add(nodeId);
+        }
+        // Keep walking through a struck directory: a noted descendant still needs
+        // to surface (and re-adds the struck path above it via its ancestors).
         for (const childId of window.URL_TREE_DATA.nodes[nodeId][NODE_CHILDREN]) {
           stack.push(childId);
         }
+      }
+    }
+    const include = new Set();
+    for (const nodeId of content) {
+      let ancestor = nodeId;
+      while (ancestor !== -1 && !include.has(ancestor)) {
+        include.add(ancestor);
+        ancestor = window.URL_TREE_DATA.nodes[ancestor][NODE_PARENT];
       }
     }
     return include;
@@ -1808,9 +1864,13 @@
     }
 
     const hostName = window.URL_TREE_DATA.hosts[hostIndexForNode(nodeId)][HOST_NAME];
+    const fullLabel = isHostRoot ? hostName : node[NODE_LABEL];
     const label = document.createElement(isEndpoint ? "a" : "span");
     label.className = "selection-label";
-    label.textContent = isHostRoot ? hostName : node[NODE_LABEL];
+    // Cap the visible segment to 20 chars so wide names don't stack vertically;
+    // the full path is always on hover.
+    label.textContent = fullLabel.length > 20 ? `${fullLabel.slice(0, 19)}…` : fullLabel;
+    label.title = nodeUrl(nodeId);
     if (isHostRoot) {
       label.classList.add("is-host");
     }
@@ -1818,7 +1878,6 @@
       label.href = nodeUrl(nodeId);
       label.target = "_blank";
       label.rel = "noopener noreferrer";
-      label.title = nodeUrl(nodeId);
     } else {
       label.classList.add("is-directory");
     }
@@ -1839,14 +1898,17 @@
       notesButton.addEventListener("click", () => openNotesPanel(nodeId));
       row.append(notesButton);
 
-      // Remove strikes it (stays here, struck, keeps its note); click again restores.
+      // Remove drops it (and its subtree) from the pane. It only stays visible —
+      // struck, with a Restore button — when it carries a note, so notes survive.
       const removeButton = document.createElement("button");
       removeButton.type = "button";
       removeButton.className = struck ? "pane-restore-button" : "pane-remove-button";
       removeButton.textContent = struck ? "Restore" : "Remove";
       removeButton.title = struck
         ? "Bring this back (unstrike)"
-        : "Remove from the selection — stays here struck, keeps its note";
+        : (hasNote
+            ? "Remove from the selection — kept here struck because it has a note"
+            : "Remove from the selection (and everything under it)");
       removeButton.addEventListener("click", () => togglePaneStrike(nodeId));
       row.append(removeButton);
     }
@@ -1948,6 +2010,11 @@
       return;
     }
     const include = collectSelectionInclude();
+    if (!include.size) {
+      elements.selectionBody.innerHTML =
+        '<div class="empty-state">Every selected path has been removed. Unstrike one in the tree, or select again.</div>';
+      return;
+    }
     const hostIndices = new Set();
     for (const nodeId of include) {
       hostIndices.add(hostIndexForNode(nodeId));
@@ -1979,7 +2046,7 @@
         </div>
         <span id="selectionCount">0 URLs</span>
       </div>
-      <p class="selection-note">Expand a branch to manage it. On each URL: <strong>Notes</strong> to jot a private note, <strong>Remove</strong> to drop it (strikes it).</p>
+      <p class="selection-note">Expand a branch to manage it. On each URL: <strong>Notes</strong> for a private note, <strong>Remove</strong> to drop it and everything under it. A URL with a note stays visible (struck) so the note is never lost.</p>
       <div class="selection-actions">
         <button type="button" id="copySelection" class="quiet-button">Copy URLs</button>
       </div>
@@ -2082,7 +2149,7 @@
     writeLocalReview(); // durable local cache immediately
     if (SYNC.reachable) {
       setNoteStatus("saving");
-      SYNC.push(syncBody, (ok) => {
+      SYNC.pushNotes(notesBody, (ok) => {
         if (state.activeNoteUrl === url) {
           setNoteStatus(ok ? "saved" : "offline");
         }
@@ -2209,6 +2276,14 @@
         runSearch(false);
       }
     }
+    // Flush any sub-debounce pending change when the tab is hidden/closed so the
+    // last action isn't lost before it syncs.
+    window.addEventListener("pagehide", () => SYNC.flushAll());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        SYNC.flushAll();
+      }
+    });
     window.requestAnimationFrame(() => elements.loadingScreen.classList.add("is-hidden"));
   }
 
@@ -2217,44 +2292,65 @@
     // is authoritative: adopt its document. If the server is empty but this
     // browser has local work, seed the server from it (one-time migration). An
     // empty server never wipes non-empty local state.
+    // Marks + selections come from the SHARED record (same for both reviewers);
+    // notes come from this reviewer's PRIVATE record. They adopt independently so
+    // a note never rides in on the shared list and vice-versa.
     const server = await SYNC.load();
     if (!server) {
       return; // no server this session — localStorage stays authoritative
     }
     startKeywordSync(server.search && server.search.terms);
-    const serverHasData =
+    const serverShared =
       (server.marks && Object.keys(server.marks).length > 0) ||
-      (Array.isArray(server.selections) && server.selections.length > 0) ||
-      (server.notes && Object.keys(server.notes).length > 0);
-    const localHasData =
-      Object.keys(state.marks).length > 0 ||
-      state.selections.size > 0 ||
-      Object.keys(state.notes).length > 0;
+      (Array.isArray(server.selections) && server.selections.length > 0);
+    const serverNotes = server.notes && Object.keys(server.notes).length > 0;
+    const localShared = Object.keys(state.marks).length > 0 || state.selections.size > 0;
+    const localNotes = Object.keys(state.notes).length > 0;
 
-    if (serverHasData) {
+    if (serverShared) {
       state.marks = server.marks && typeof server.marks === "object" ? server.marks : {};
       state.selections = new Set(Array.isArray(server.selections) ? server.selections : []);
+    }
+    if (serverNotes) {
       state.notes = server.notes && typeof server.notes === "object" ? server.notes : {};
+    }
+    if (serverShared || serverNotes) {
       writeLocalReview();
-      // rebuildTree() clears the search box, so set the keywords AFTER it.
+    }
+
+    // rebuildTree() clears the search box, so set the keywords AFTER it.
+    if (serverShared) {
       rebuildTree();
-      if (server.search && typeof server.search.terms === "string") {
-        elements.searchInput.value = server.search.terms;
-        if (server.search.matchMode) {
-          elements.matchMode.value = server.search.matchMode;
-        }
-        if (server.search.termLogic) {
-          elements.termLogic.value = server.search.termLogic;
-        }
-        updateSearchMode();
+    }
+    if (server.search && typeof server.search.terms === "string") {
+      elements.searchInput.value = server.search.terms;
+      if (server.search.matchMode) {
+        elements.matchMode.value = server.search.matchMode;
       }
-      if (elements.searchInput.value.trim()) {
-        runSearch(false);
-      } else {
-        afterReviewChange();
+      if (server.search.termLogic) {
+        elements.termLogic.value = server.search.termLogic;
       }
-    } else if (localHasData) {
-      SYNC.push(syncBody); // seed the fresh server from this browser's work
+      updateSearchMode();
+    }
+    if (elements.searchInput.value.trim()) {
+      runSearch(false);
+    }
+    if (serverShared || serverNotes) {
+      // Reflect adopted marks/selections/notes in the tree, pane, and metrics
+      // (notes affect which struck nodes stay pinned in the selection pane).
+      applyReviewState();
+      renderSelectionPane();
+      renderHeaderMetrics();
+      updateReviewSummary();
+    }
+
+    // Seed a fresh server from this browser's local-only work (one-time), each
+    // channel independently so an empty shared record doesn't wait on notes.
+    if (!serverShared && localShared) {
+      SYNC.pushShared(sharedBody);
+    }
+    if (!serverNotes && localNotes) {
+      SYNC.pushNotes(notesBody);
     }
   }
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Export all annotation data from review.db for analysis.
 
-Pulls every reviewer's strikes, selections, and notes plus the shared keyword
-list out of the SQLite database and writes them as organized text/TSV files,
-then zips one timestamped archive per run (so dumps are easy to store, copy, and
-diff). Standard library only — run it on the server next to review.db.
+The strike ``marks``, ``selections`` and keyword list are SHARED per institution;
+each reviewer's ``notes`` are private. This dumps the shared working set plus
+every reviewer's notes as organized text/TSV files, then zips one timestamped
+archive per run (easy to store, copy, and diff). Standard library only — run it
+on the server next to review.db.
 
 Usage
 -----
@@ -16,11 +17,10 @@ Archive layout  (annotations_export_<UTC>.zip)
 ----------------------------------------------
     00_MANIFEST.txt                     run metadata + overall counts
     <institution>/
-        00_summary.txt                  per-institution counts, keywords, agreement
+        00_summary.txt                  counts, keywords
         keywords.txt                    the shared keyword list, one per line
-        selections_by_url.tsv           url + a 0/1 column per reviewer + who
-        selections_<user>.txt           that reviewer's selected paths
-        strikes_<user>.tsv              url, scope, reason, note, updated_at
+        selections.txt                  shared selected paths, one per line
+        strikes.tsv                     shared: url, scope, reason, note, updated_at
         notes_by_url.txt                per URL, EVERY reviewer's note together
                                         (sorted by URL, so a path/subtree groups)
         notes_<user>.tsv                url + note (newlines escaped) for loading
@@ -29,7 +29,9 @@ Notes
 -----
 Selections are the reviewers' *selected nodes* (a leaf = that URL; a branch =
 that branch root, which the app expands to its non-struck subtree). Strikes are
-the excluded paths. Everything is keyed by clean URL.
+the excluded paths. Everything is keyed by clean URL. If the DB predates the
+shared model, marks/selections are reconstructed as the union of both reviewers'
+old per-user sets (selection wins).
 """
 
 from __future__ import annotations
@@ -57,23 +59,60 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _governs(mark_url: str, sel_url: str) -> bool:
+    base = mark_url.rstrip("/")
+    return sel_url == mark_url or sel_url == base or sel_url.startswith(base + "/")
+
+
+def _union_legacy(users: dict[str, dict]) -> dict:
+    """Fallback for pre-shared databases: union both reviewers' marks/selections,
+    selection wins (carve out any strike governing a selection)."""
+    marks: dict = {}
+    selections: set[str] = set()
+    for u in users.values():
+        for url, mark in u.get("marks", {}).items():
+            existing = marks.get(url)
+            if existing is None or str(mark.get("updatedAt", "")) >= str(existing.get("updatedAt", "")):
+                marks[url] = mark
+        selections.update(u.get("selections", []))
+    for sel in selections:
+        for murl in list(marks):
+            if _governs(murl, sel):
+                del marks[murl]
+    return {"marks": marks, "selections": sorted(selections)}
+
+
 def _load(db_path: str):
     conn = _connect(db_path)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+    # Shared marks/selections per institution.
+    shared: dict[str, dict] = {}
+    if "shared" in tables:
+        for row in conn.execute("SELECT institution, marks, selections FROM shared"):
+            shared[row["institution"]] = {
+                "marks": json.loads(row["marks"] or "{}"),
+                "selections": json.loads(row["selections"] or "[]"),
+            }
+
+    # Per-user rows: notes (current), plus legacy marks/selections for fallback.
     cols = [r[1] for r in conn.execute("PRAGMA table_info(annotations)")]
     has_notes = "notes" in cols
-    fields = "institution, user, marks, selections" + (", notes" if has_notes else "")
-    annotations: dict[str, dict[str, dict]] = {}
-    for row in conn.execute(f"SELECT {fields} FROM annotations ORDER BY institution, user"):
-        annotations.setdefault(row["institution"], {})[row["user"]] = {
+    per_user: dict[str, dict[str, dict]] = {}
+    for row in conn.execute("SELECT institution, user, marks, selections, "
+                            + ("notes" if has_notes else "'{}' AS notes")
+                            + " FROM annotations ORDER BY institution, user"):
+        per_user.setdefault(row["institution"], {})[row["user"]] = {
             "marks": json.loads(row["marks"] or "{}"),
             "selections": json.loads(row["selections"] or "[]"),
-            "notes": json.loads(row["notes"]) if has_notes and row["notes"] else {},
+            "notes": json.loads(row["notes"]) if row["notes"] else {},
         }
+
     keywords: dict[str, dict] = {}
     for row in conn.execute("SELECT institution, search FROM keywords"):
         keywords[row["institution"]] = json.loads(row["search"] or "{}")
     conn.close()
-    return annotations, keywords
+    return shared, per_user, keywords
 
 
 def _keyword_list(search: dict) -> list[str]:
@@ -86,44 +125,47 @@ def _keyword_list(search: dict) -> list[str]:
     return out
 
 
-def _write_institution(folder: str, institution: str, users: dict[str, dict],
-                       search: dict) -> dict:
+def _write_institution(folder: str, institution: str, shared: dict,
+                       users: dict[str, dict], search: dict) -> dict:
     os.makedirs(folder, exist_ok=True)
     user_names = sorted(users)
     keywords = _keyword_list(search)
+
+    # Prefer the shared record; fall back to a union of legacy per-user data.
+    if shared and (shared.get("marks") or shared.get("selections")):
+        marks = shared.get("marks", {})
+        selections = sorted(set(shared.get("selections", [])))
+    else:
+        legacy = _union_legacy(users)
+        marks = legacy["marks"]
+        selections = legacy["selections"]
 
     # keywords.txt (shared)
     with open(os.path.join(folder, "keywords.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(keywords) + ("\n" if keywords else ""))
 
-    # per-user selections + strikes + notes
-    sel_sets = {u: set(users[u]["selections"]) for u in user_names}
+    # selections.txt (shared)
+    with open(os.path.join(folder, "selections.txt"), "w", encoding="utf-8") as f:
+        for url in selections:
+            f.write(url + "\n")
+
+    # strikes.tsv (shared)
+    with open(os.path.join(folder, "strikes.tsv"), "w", encoding="utf-8") as f:
+        f.write("url\tscope\treason\tnote\tupdated_at\n")
+        for url, mark in sorted(marks.items()):
+            if not isinstance(mark, dict):
+                continue
+            f.write("\t".join([
+                url, str(mark.get("scope", "")), str(mark.get("reason", "")),
+                _esc(str(mark.get("note", ""))), str(mark.get("updatedAt", "")),
+            ]) + "\n")
+
+    # per-user notes
     for u in user_names:
-        with open(os.path.join(folder, f"selections_{u}.txt"), "w", encoding="utf-8") as f:
-            for url in sorted(sel_sets[u]):
-                f.write(url + "\n")
-        with open(os.path.join(folder, f"strikes_{u}.tsv"), "w", encoding="utf-8") as f:
-            f.write("url\tscope\treason\tnote\tupdated_at\n")
-            for url, mark in sorted(users[u]["marks"].items()):
-                if not isinstance(mark, dict):
-                    continue
-                f.write("\t".join([
-                    url, str(mark.get("scope", "")), str(mark.get("reason", "")),
-                    _esc(str(mark.get("note", ""))), str(mark.get("updatedAt", "")),
-                ]) + "\n")
         with open(os.path.join(folder, f"notes_{u}.tsv"), "w", encoding="utf-8") as f:
             f.write("url\tnote\n")
             for url, note in sorted(users[u]["notes"].items()):
                 f.write(f"{url}\t{_esc(str(note))}\n")
-
-    # selections_by_url.tsv — agreement matrix
-    all_sel_urls = sorted(set().union(*sel_sets.values()) if sel_sets else set())
-    with open(os.path.join(folder, "selections_by_url.tsv"), "w", encoding="utf-8") as f:
-        f.write("url\t" + "\t".join(user_names) + "\tselected_by\n")
-        for url in all_sel_urls:
-            who = [u for u in user_names if url in sel_sets[u]]
-            f.write(url + "\t" + "\t".join("1" if u in who else "0" for u in user_names)
-                    + "\t" + ",".join(who) + "\n")
 
     # notes_by_url.txt — every reviewer's note for a URL, together, sorted by URL
     note_urls = sorted(set().union(*[set(users[u]["notes"]) for u in user_names]) if user_names else set())
@@ -140,30 +182,24 @@ def _write_institution(folder: str, institution: str, users: dict[str, dict],
                     f.write("      (no note)\n")
             f.write("\n")
 
-    # both-selected / only-one summaries
-    both = set.intersection(*sel_sets.values()) if len(sel_sets) >= 2 else set()
     counts = {
         "users": user_names,
         "keywords": len(keywords),
-        "selections": {u: len(sel_sets[u]) for u in user_names},
-        "strikes": {u: len(users[u]["marks"]) for u in user_names},
+        "selections": len(selections),
+        "strikes": len(marks),
         "notes": {u: len(users[u]["notes"]) for u in user_names},
-        "selected_by_all": len(both),
         "notes_urls": len(note_urls),
     }
 
     with open(os.path.join(folder, "00_summary.txt"), "w", encoding="utf-8") as f:
         f.write(f"Annotation summary — {institution}\n{'=' * 50}\n")
-        f.write(f"Reviewers: {', '.join(user_names) or '(none)'}\n")
-        f.write(f"Shared keywords: {len(keywords)}\n\n")
+        f.write(f"Reviewers (notes): {', '.join(user_names) or '(none)'}\n")
+        f.write(f"Shared keywords: {len(keywords)}\n")
+        f.write(f"Shared selections: {len(selections)}\n")
+        f.write(f"Shared strikes: {len(marks)}\n\n")
         for u in user_names:
-            f.write(f"[{u}]  selections={counts['selections'][u]}  "
-                    f"strikes={counts['strikes'][u]}  notes={counts['notes'][u]}\n")
-        if len(user_names) >= 2:
-            f.write(f"\nSelected by ALL reviewers: {len(both)}\n")
-            for u in user_names:
-                only = sel_sets[u] - set().union(*[sel_sets[o] for o in user_names if o != u])
-                f.write(f"Selected ONLY by {u}: {len(only)}\n")
+            f.write(f"[{u}]  notes={counts['notes'][u]}\n")
+        f.write(f"\nURLs with at least one note: {len(note_urls)}\n")
         f.write("\nKeywords:\n")
         for term in keywords:
             f.write(f"  {term}\n")
@@ -182,9 +218,9 @@ def main() -> None:
     if not os.path.exists(args.db):
         raise SystemExit(f"database not found: {args.db}")
 
-    annotations, keywords = _load(args.db)
+    shared, per_user, keywords = _load(args.db)
     institutions = ([args.institution] if args.institution
-                    else sorted(set(annotations) | set(keywords)))
+                    else sorted(set(shared) | set(per_user) | set(keywords)))
     if not institutions:
         raise SystemExit("no annotation data found in the database")
 
@@ -195,9 +231,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         overall = []
         for inst in institutions:
-            users = annotations.get(inst, {})
-            counts = _write_institution(os.path.join(tmp, inst), inst, users,
-                                        keywords.get(inst, {}))
+            counts = _write_institution(
+                os.path.join(tmp, inst), inst,
+                shared.get(inst, {}), per_user.get(inst, {}), keywords.get(inst, {})
+            )
             overall.append((inst, counts))
         with open(os.path.join(tmp, "00_MANIFEST.txt"), "w", encoding="utf-8") as f:
             f.write("Annotation export\n" + "=" * 50 + "\n")
@@ -207,7 +244,7 @@ def main() -> None:
             for inst, counts in overall:
                 f.write(f"[{inst}] reviewers={','.join(counts['users']) or '-'}  "
                         f"keywords={counts['keywords']}  "
-                        f"selected_by_all={counts['selected_by_all']}  "
+                        f"selections={counts['selections']}  strikes={counts['strikes']}  "
                         f"noted_urls={counts['notes_urls']}\n")
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -218,8 +255,8 @@ def main() -> None:
 
     print(f"wrote {zip_path}")
     for inst, counts in overall:
-        print(f"  {inst}: reviewers={counts['users']} "
-              f"selections={counts['selections']} notes={counts['notes']}")
+        print(f"  {inst}: selections={counts['selections']} strikes={counts['strikes']} "
+              f"notes={counts['notes']}")
 
 
 if __name__ == "__main__":
