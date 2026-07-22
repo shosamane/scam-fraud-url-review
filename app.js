@@ -50,6 +50,7 @@
     totalMatches: 0,
     page: 0,
     onlyStruck: false,
+    resultFilter: "", // live substring filter over the full URL, ANDed with matches
     searchTerms: [],
     matchMode: "partial",
     hideConfirmedNotFound: true,
@@ -1246,19 +1247,34 @@
     // Surface-for-review: struck paths that match a keyword ADDED SINCE they were
     // struck. Nothing is auto-unstruck, and a strike made with a keyword already
     // in mind is NOT re-nagged — only genuinely new keyword hits are flagged.
-    const reviewResults = state.results.filter((result) => newKeywordsForStruckNode(result.nodeId).length > 0);
+    // Live substring filter over the full URL, ANDed with the keyword matches
+    // (matches host + path, so subdomains and cross-segment substrings both work).
+    const filter = state.resultFilter;
+    const base = filter
+      ? state.results.filter((result) => result.url.toLowerCase().includes(filter))
+      : state.results;
+
+    const reviewResults = base.filter((result) => newKeywordsForStruckNode(result.nodeId).length > 0);
     const reviewCount = reviewResults.length;
     if (state.onlyStruck && reviewCount === 0) {
       state.onlyStruck = false; // nothing left to review → drop back to all matches
     }
-    const visible = state.onlyStruck ? reviewResults : state.results;
+    const visible = state.onlyStruck ? reviewResults : base;
 
     const storedNotice = state.totalMatches > state.results.length
       ? ` · first ${formatNumber(state.results.length)} available`
       : "";
     const reviewNotice = reviewCount ? ` · ${formatNumber(reviewCount)} to review` : "";
-    elements.resultCount.textContent =
-      `${formatNumber(state.totalMatches)} matches${storedNotice}${reviewNotice}`;
+    elements.resultCount.textContent = filter
+      ? `${formatNumber(base.length)} of ${formatNumber(state.totalMatches)} matches contain “${filter}”${storedNotice}${reviewNotice}`
+      : `${formatNumber(state.totalMatches)} matches${storedNotice}${reviewNotice}`;
+
+    if (filter && base.length === 0) {
+      elements.results.innerHTML =
+        `<div class="empty-state">None of the available matches contain “${filter}”.</div>`;
+      elements.pagination.hidden = true;
+      return;
+    }
 
     if (reviewCount) {
       const newTerms = new Set();
@@ -1382,6 +1398,11 @@
     state.searchTerms = [];
     state.page = 0;
     state.onlyStruck = false;
+    state.resultFilter = "";
+    if (elements.resultFilter) {
+      elements.resultFilter.value = "";
+      elements.resultFilterClear.hidden = true;
+    }
     clearSearchHighlights();
     elements.resultCount.textContent = "No search yet";
     elements.results.innerHTML = '<div class="empty-state">Search results will appear here.</div>';
@@ -2202,6 +2223,7 @@
       "searchInput", "matchMode", "termLogic", "termLogicLabel", "searchHint",
       "clearSearch", "resultCount", "results", "pagination", "previousPage",
       "nextPage", "pageStatus", "expandHosts", "collapseAll", "tree",
+      "resultFilter", "resultFilterClear",
     ]) {
       elements[id] = document.getElementById(id);
     }
@@ -2247,6 +2269,26 @@
       }
     });
     elements.collapseAll.addEventListener("click", collapseAll);
+    if (elements.resultFilter) {
+      elements.resultFilter.addEventListener("input", () => {
+        state.resultFilter = elements.resultFilter.value.trim().toLowerCase();
+        state.page = 0; // a narrower filter can shrink the list past the current page
+        elements.resultFilterClear.hidden = state.resultFilter === "";
+        if (state.totalMatches) {
+          renderResults();
+        }
+      });
+      elements.resultFilterClear.addEventListener("click", () => {
+        elements.resultFilter.value = "";
+        state.resultFilter = "";
+        state.page = 0;
+        elements.resultFilterClear.hidden = true;
+        if (state.totalMatches) {
+          renderResults();
+        }
+        elements.resultFilter.focus();
+      });
+    }
   }
 
   function initialize() {

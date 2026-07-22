@@ -61,6 +61,12 @@
           <h2>Results</h2>
           <span id="resultCount">No search yet</span>
         </div>
+        <div class="result-filter-row">
+          <input type="text" id="resultFilter" class="result-filter"
+                 placeholder="Filter these matches — substring, e.g. online. or /zelle"
+                 autocomplete="off" spellcheck="false" aria-label="Filter results by substring" />
+          <button type="button" id="resultFilterClear" class="result-filter-clear" hidden aria-label="Clear filter">×</button>
+        </div>
         <div id="results" class="results-list"></div>
         <div class="pagination" id="pagination" hidden>
           <button type="button" id="previousPage">Previous</button>
