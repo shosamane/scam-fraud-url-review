@@ -1,4 +1,5 @@
 [
   { "id": "chase", "label": "Chase" },
-  { "id": "bankofamerica", "label": "Bank of America" }
+  { "id": "bankofamerica", "label": "Bank of America" },
+  { "id": "wellsfargo", "label": "Wells Fargo" }
 ]
