@@ -228,8 +228,14 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .result-review-status { max-width: 92px; color: #8a3945; font-size: 9px; font-weight: 800; line-height: 1.2; text-align: right; }
 .result-actions .result-unstrike { color: #7a2b36; background: #ffe1e6; }
 .struck-review-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 10px; padding: 9px 11px; border: 1px solid #f3c9d0; border-radius: 11px; background: #fff2f4; color: #7a2b36; font-size: 11px; font-weight: 700; line-height: 1.35; }
-.struck-review-toggle { flex: none; padding: 7px 10px; border-radius: 8px; color: #7a2b36; background: #ffd7de; font-size: 10px; font-weight: 800; white-space: nowrap; }
-.result-card.is-review-struck .result-url mark { background: #ffc9d1; }
+.struck-review-buttons { flex: none; display: flex; gap: 6px; }
+.struck-review-toggle, .struck-review-ack { padding: 7px 10px; border-radius: 8px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.struck-review-toggle { color: #7a2b36; background: #ffd7de; }
+.struck-review-ack { color: var(--teal-dark); background: var(--mint); }
+/* Already-reviewed struck matches read muted; only new-keyword hits pop. */
+.result-card.needs-review .result-url { opacity: 0.85; }
+.result-card.needs-review { border-left: 3px solid #e0748a; padding-left: 8px; }
+.result-card.needs-review .result-url mark { background: #ffc9d1; }
 mark { padding: 0 2px; border-radius: 3px; color: inherit; background: var(--amber); }
 .pagination { align-items: center; justify-content: space-between; gap: 8px; margin-top: 13px; }
 .pagination:not([hidden]) { display: flex; }

@@ -1083,6 +1083,91 @@
     }
   }
 
+  function nodeMatchedTerms(nodeId) {
+    // Which of the CURRENT search terms this node's own segment matches.
+    if (!state.searchTerms.length) {
+      return [];
+    }
+    if (state.matchMode === "exact") {
+      const url = nodeUrl(nodeId);
+      return state.searchTerms.filter((term) => term === url);
+    }
+    const label = window.URL_TREE_DATA.nodes[nodeId][NODE_LABEL].toLowerCase();
+    return state.searchTerms.filter((term) => label.includes(term));
+  }
+
+  function governingMarkUrl(nodeId) {
+    // URL key of the mark striking this node — its own mark if any, else the
+    // nearest ancestor branch mark. Mirrors reviewStateForNode's governing pick.
+    const selfUrl = nodeUrl(nodeId);
+    if (state.marks[selfUrl]) {
+      return selfUrl;
+    }
+    let currentId = window.URL_TREE_DATA.nodes[nodeId][NODE_PARENT];
+    while (currentId !== -1) {
+      const url = nodeUrl(currentId);
+      const mark = state.marks[url];
+      if (mark && mark.scope === "branch") {
+        return url;
+      }
+      currentId = window.URL_TREE_DATA.nodes[currentId][NODE_PARENT];
+    }
+    return null;
+  }
+
+  function newKeywordsForStruckNode(nodeId) {
+    // The current terms this STRUCK node matches that were NOT already active
+    // when it was struck — i.e. keywords added since. Empty => nothing new to
+    // review (it was struck with those keywords already in mind). A legacy mark
+    // with no recorded terms counts every matched term as new, so it surfaces
+    // once for a one-time review, then quiets after "Mark reviewed"/unstrike.
+    const review = reviewStateForNode(nodeId);
+    if (!review.struck) {
+      return [];
+    }
+    const matched = nodeMatchedTerms(nodeId);
+    if (!matched.length) {
+      return [];
+    }
+    const stamped = review.governing && Array.isArray(review.governing.terms)
+      ? review.governing.terms
+      : null;
+    if (!stamped) {
+      return matched;
+    }
+    return matched.filter((term) => !stamped.includes(term));
+  }
+
+  function acknowledgeStruckReview(reviewResults) {
+    // "Mark reviewed": record that the current keyword set has now been
+    // considered for every surfaced struck path, so they stop re-surfacing until
+    // a NEWER keyword matches. Bumps the governing mark's recorded terms (deduped
+    // by mark, since a cascade/host mark can govern many surfaced leaves).
+    const bumped = new Set();
+    let changed = false;
+    for (const result of reviewResults) {
+      const governingUrl = governingMarkUrl(result.nodeId);
+      if (governingUrl === null || bumped.has(governingUrl)) {
+        continue;
+      }
+      bumped.add(governingUrl);
+      const mark = state.marks[governingUrl];
+      const merged = Array.isArray(mark.terms) ? mark.terms.slice() : [];
+      for (const term of state.searchTerms) {
+        if (!merged.includes(term)) {
+          merged.push(term);
+        }
+      }
+      mark.terms = merged;
+      changed = true;
+    }
+    if (changed) {
+      state.onlyStruck = false;
+      persistReviewMarks();
+      afterReviewChange();
+    }
+  }
+
   function renderResults() {
     elements.results.replaceChildren();
     if (!state.totalMatches) {
@@ -1092,30 +1177,42 @@
       return;
     }
 
-    // Surface-for-review: struck paths that STILL match the current keywords.
-    // Nothing is auto-unstruck — we only flag them so a newly added keyword
-    // can't silently hide content behind an earlier strike.
-    const struckResults = state.results.filter((result) => reviewStateForNode(result.nodeId).struck);
-    const struckCount = struckResults.length;
-    if (state.onlyStruck && struckCount === 0) {
+    // Surface-for-review: struck paths that match a keyword ADDED SINCE they were
+    // struck. Nothing is auto-unstruck, and a strike made with a keyword already
+    // in mind is NOT re-nagged — only genuinely new keyword hits are flagged.
+    const reviewResults = state.results.filter((result) => newKeywordsForStruckNode(result.nodeId).length > 0);
+    const reviewCount = reviewResults.length;
+    if (state.onlyStruck && reviewCount === 0) {
       state.onlyStruck = false; // nothing left to review → drop back to all matches
     }
-    const visible = state.onlyStruck ? struckResults : state.results;
+    const visible = state.onlyStruck ? reviewResults : state.results;
 
     const storedNotice = state.totalMatches > state.results.length
       ? ` · first ${formatNumber(state.results.length)} available`
       : "";
-    const struckNotice = struckCount ? ` · ${formatNumber(struckCount)} struck` : "";
+    const reviewNotice = reviewCount ? ` · ${formatNumber(reviewCount)} to review` : "";
     elements.resultCount.textContent =
-      `${formatNumber(state.totalMatches)} matches${storedNotice}${struckNotice}`;
+      `${formatNumber(state.totalMatches)} matches${storedNotice}${reviewNotice}`;
 
-    if (struckCount) {
+    if (reviewCount) {
+      const newTerms = new Set();
+      for (const result of reviewResults) {
+        for (const term of newKeywordsForStruckNode(result.nodeId)) {
+          newTerms.add(term);
+        }
+      }
+      const termList = [...newTerms];
+      const keywordPhrase = termList.length && termList.length <= 4
+        ? `: ${termList.join(", ")}`
+        : "";
       const banner = document.createElement("div");
       banner.className = "struck-review-banner";
       const text = document.createElement("span");
       text.textContent = state.onlyStruck
-        ? `Showing ${formatNumber(struckCount)} struck path${struckCount === 1 ? "" : "s"} that still match — unstrike anything relevant.`
-        : `${formatNumber(struckCount)} struck path${struckCount === 1 ? "" : "s"} also match these keywords.`;
+        ? `Showing ${formatNumber(reviewCount)} struck path${reviewCount === 1 ? "" : "s"} matching newly added keyword${keywordPhrase} — unstrike anything relevant.`
+        : `${formatNumber(reviewCount)} struck path${reviewCount === 1 ? "" : "s"} match a keyword added since they were struck${keywordPhrase}.`;
+      const buttons = document.createElement("span");
+      buttons.className = "struck-review-buttons";
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "struck-review-toggle";
@@ -1125,7 +1222,14 @@
         state.page = 0;
         renderResults();
       });
-      banner.append(text, toggle);
+      const ack = document.createElement("button");
+      ack.type = "button";
+      ack.className = "struck-review-ack";
+      ack.textContent = "Mark reviewed";
+      ack.title = "Keep these struck and stop flagging them for the current keywords";
+      ack.addEventListener("click", () => acknowledgeStruckReview(reviewResults));
+      buttons.append(toggle, ack);
+      banner.append(text, buttons);
       elements.results.append(banner);
     }
 
@@ -1142,6 +1246,9 @@
       if (review.struck) {
         card.classList.add("is-review-struck");
         card.title = review.governing.note || reasonLabel(review.governing.reason);
+        if (newKeywordsForStruckNode(result.nodeId).length > 0) {
+          card.classList.add("needs-review"); // matches a keyword added since strike
+        }
       }
       const url = document.createElement("div");
       url.className = "result-url";
@@ -1341,6 +1448,7 @@
       scope: elements.reviewScope.value,
       reason: elements.reviewReason.value,
       note: elements.reviewNote.value.trim(),
+      terms: [...state.searchTerms], // keyword set considered when struck
       updatedAt: new Date().toISOString(),
     };
     autoStrikeUpFrom(nodeId);
@@ -1406,6 +1514,7 @@
       scope: "branch",
       reason: "irrelevant",
       note: note || "",
+      terms: [...state.searchTerms], // keyword set considered when struck
       updatedAt: new Date().toISOString(),
     };
     return true;
