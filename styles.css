@@ -286,6 +286,32 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .result-card.needs-review .result-url { opacity: 0.85; }
 .result-card.needs-review { border-left: 3px solid #e0748a; padding-left: 8px; }
 .result-card.needs-review .result-url mark { background: #ffc9d1; }
+/* Selection in the results list — same indigo language as the tree, so the three
+   states read at a glance: struck (muted + line-through), plain (default), and
+   selected (indigo). Placed after the struck rules so selection wins if both. */
+.result-card.is-selected {
+  border-left: 3px solid var(--indigo);
+  padding-left: 8px;
+  background: var(--indigo-soft);
+}
+.result-card.is-selected-descendant {
+  border-left: 3px solid var(--indigo-soft);
+  padding-left: 8px;
+  background: var(--indigo-faint);
+}
+/* A selected path is one you're KEEPING — never show it struck-through. */
+.result-card.is-selected .result-url,
+.result-card.is-selected-descendant .result-url {
+  opacity: 1;
+  text-decoration: none;
+}
+.result-selected-status {
+  margin-right: auto;
+  color: var(--indigo);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
+}
 mark { padding: 0 2px; border-radius: 3px; color: inherit; background: var(--amber); }
 .pagination { align-items: center; justify-content: space-between; gap: 8px; margin-top: 13px; }
 .pagination:not([hidden]) { display: flex; }

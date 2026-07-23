@@ -1410,11 +1410,31 @@
           card.classList.add("needs-review"); // matches a keyword added since strike
         }
       }
+      // Selection state, same indigo language as the tree: a path that IS the
+      // chosen selection, vs one covered by a selected ancestor. Selection and
+      // strike are mutually exclusive in practice (selecting carves out the
+      // governing strike), but if both are ever set, selection wins visually.
+      const selectedExact = isSelected(result.nodeId);
+      const selectedWithin = selectedExact || withinSelection(result.nodeId);
+      if (selectedExact) {
+        card.classList.add("is-selected");
+      } else if (selectedWithin) {
+        card.classList.add("is-selected-descendant");
+      }
       const url = document.createElement("div");
       url.className = "result-url";
       appendHighlightedText(url, result.url);
       const actions = document.createElement("div");
       actions.className = "result-actions";
+      if (selectedWithin) {
+        const selectedStatus = document.createElement("span");
+        selectedStatus.className = "result-selected-status";
+        selectedStatus.textContent = selectedExact ? "Selected" : "In selection";
+        selectedStatus.title = selectedExact
+          ? "This exact path is in your selection"
+          : "Covered by a selected parent path";
+        actions.append(selectedStatus);
+      }
       if (review.struck) {
         const reviewStatus = document.createElement("span");
         reviewStatus.className = "result-review-status";
