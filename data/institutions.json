@@ -22,5 +22,12 @@
   { "id": "westernunion", "label": "Western Union" },
   { "id": "okx", "label": "OKX" },
   { "id": "binanceus", "label": "Binance.US" },
-  { "id": "bitget", "label": "Bitget" }
+  { "id": "bitget", "label": "Bitget" },
+  { "id": "facebook", "label": "Facebook" },
+  { "id": "instagram", "label": "Instagram" },
+  { "id": "whatsapp", "label": "WhatsApp" },
+  { "id": "x", "label": "X (Twitter)" },
+  { "id": "tiktok", "label": "TikTok" },
+  { "id": "telegram", "label": "Telegram" },
+  { "id": "linkedin", "label": "LinkedIn" }
 ]
