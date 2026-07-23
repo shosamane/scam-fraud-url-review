@@ -50,6 +50,7 @@
     totalMatches: 0,
     page: 0,
     onlyStruck: false,
+    onlyUnstruck: false, // show only paths that are NOT struck (review what's kept)
     resultFilter: "", // live substring filter over the full URL, ANDed with matches
     searchTerms: [],
     matchMode: "partial",
@@ -1035,6 +1036,7 @@
     state.allMatchNodeIds.clear();
     state.page = 0;
     state.onlyStruck = false;
+    state.onlyUnstruck = false;
     state.searchTerms = terms;
     state.matchMode = elements.matchMode.value;
     const logic = elements.termLogic.value;
@@ -1300,7 +1302,23 @@
     if (state.onlyStruck && reviewCount === 0) {
       state.onlyStruck = false; // nothing left to review → drop back to all matches
     }
-    const visible = state.onlyStruck ? reviewResults : base;
+    // Three views: "Review struck" (only-to-review), "Only unstruck" (hide every
+    // struck path, to review what you're keeping), or all matches. The two toggles
+    // are mutually exclusive (enforced where they're flipped).
+    let visible = base;
+    let unstruckShown = 0;
+    let struckHidden = 0;
+    if (state.onlyStruck) {
+      visible = reviewResults;
+    } else if (state.onlyUnstruck) {
+      visible = base.filter((result) => !reviewStateForNode(result.nodeId).struck);
+      unstruckShown = visible.length;
+      struckHidden = base.length - unstruckShown;
+    }
+    if (elements.onlyUnstruckToggle) {
+      elements.onlyUnstruckToggle.classList.toggle("is-active", state.onlyUnstruck);
+      elements.onlyUnstruckToggle.setAttribute("aria-pressed", state.onlyUnstruck ? "true" : "false");
+    }
 
     const storedNotice = state.totalMatches > state.results.length
       ? ` · first ${formatNumber(state.results.length)} available`
@@ -1315,13 +1333,22 @@
       // The filter hides EVERY to-review path — the dangerous case: still flag it.
       reviewNotice = ` · ${formatNumber(hiddenReview)} to review outside this filter`;
     }
+    const unstruckNotice = state.onlyUnstruck
+      ? ` · showing ${formatNumber(unstruckShown)} unstruck (${formatNumber(struckHidden)} struck hidden)`
+      : "";
     elements.resultCount.textContent = filter
-      ? `${formatNumber(base.length)} of ${formatNumber(state.totalMatches)} matches contain “${filter}”${storedNotice}${reviewNotice}`
-      : `${formatNumber(state.totalMatches)} matches${storedNotice}${reviewNotice}`;
+      ? `${formatNumber(base.length)} of ${formatNumber(state.totalMatches)} matches contain “${filter}”${storedNotice}${reviewNotice}${unstruckNotice}`
+      : `${formatNumber(state.totalMatches)} matches${storedNotice}${reviewNotice}${unstruckNotice}`;
 
     if (filter && base.length === 0) {
       elements.results.innerHTML =
         `<div class="empty-state">None of the available matches contain “${filter}”.</div>`;
+      elements.pagination.hidden = true;
+      return;
+    }
+    if (state.onlyUnstruck && visible.length === 0) {
+      elements.results.innerHTML =
+        '<div class="empty-state">Every matched path here is struck — nothing unstruck to show.</div>';
       elements.pagination.hidden = true;
       return;
     }
@@ -1351,6 +1378,7 @@
       toggle.textContent = state.onlyStruck ? "Show all matches" : "Review struck";
       toggle.addEventListener("click", () => {
         state.onlyStruck = !state.onlyStruck;
+        if (state.onlyStruck) state.onlyUnstruck = false; // the two views are exclusive
         state.page = 0;
         renderResults();
       });
@@ -1468,6 +1496,7 @@
     state.searchTerms = [];
     state.page = 0;
     state.onlyStruck = false;
+    state.onlyUnstruck = false;
     state.resultFilter = "";
     if (elements.resultFilter) {
       elements.resultFilter.value = "";
@@ -2315,7 +2344,7 @@
       "searchInput", "matchMode", "termLogic", "termLogicLabel", "searchHint",
       "clearSearch", "resultCount", "results", "pagination", "previousPage",
       "nextPage", "pageStatus", "expandHosts", "collapseAll", "tree",
-      "resultFilter", "resultFilterClear",
+      "resultFilter", "resultFilterClear", "onlyUnstruckToggle",
     ]) {
       elements[id] = document.getElementById(id);
     }
@@ -2379,6 +2408,16 @@
           renderResults();
         }
         elements.resultFilter.focus();
+      });
+    }
+    if (elements.onlyUnstruckToggle) {
+      elements.onlyUnstruckToggle.addEventListener("click", () => {
+        state.onlyUnstruck = !state.onlyUnstruck;
+        if (state.onlyUnstruck) state.onlyStruck = false; // the two views are exclusive
+        state.page = 0;
+        if (state.totalMatches) {
+          renderResults();
+        }
       });
     }
   }

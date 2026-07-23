@@ -246,6 +246,23 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   line-height: 1;
 }
 .result-filter-clear:hover { color: #7a2b36; background: #ffe1e6; }
+.result-tools { display: flex; gap: 8px; margin-top: 8px; }
+.only-unstruck-toggle {
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfd;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.only-unstruck-toggle:hover { border-color: var(--teal); color: var(--teal-dark); }
+.only-unstruck-toggle.is-active {
+  background: var(--mint);
+  border-color: var(--teal);
+  color: var(--teal-dark);
+}
 .results-list { margin-top: 10px; }
 .empty-state { padding: 18px; border: 1px dashed #cbd8dc; border-radius: 13px; color: var(--muted); text-align: center; }
 /* URL on its own full-width line, actions in a wrapping row beneath — so a long
