@@ -1060,10 +1060,19 @@
       if (!matched) {
         continue;
       }
-      state.totalMatches += 1;
-      state.allMatchNodeIds.add(nodeId); // uncapped: highlights & host-match must see every match
-      if (state.results.length < STORED_RESULT_LIMIT) {
-        state.results.push({ nodeId, url: nodeUrl(nodeId) });
+      // Every matching node feeds highlights, host-match, and the cascade —
+      // including a keyword that lands on an INTERMEDIATE path segment.
+      state.allMatchNodeIds.add(nodeId);
+      // ...but only real URL endpoints are reviewable results. A partial keyword
+      // can match an intermediate segment that is not itself a crawled URL (e.g.
+      // .../online-mobile-banking-privacy, which exists only because a deeper URL
+      // does). Those are non-clickable in the tree, so they must not show up in
+      // the results list as a URL to review. (Exact mode already required this.)
+      if (filteredVariantCount(nodeId)) {
+        state.totalMatches += 1;
+        if (state.results.length < STORED_RESULT_LIMIT) {
+          state.results.push({ nodeId, url: nodeUrl(nodeId) });
+        }
       }
     }
 
