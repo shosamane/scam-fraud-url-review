@@ -2418,7 +2418,7 @@
       }
       updateSearchMode();
       if (savedSearch.terms.trim()) {
-        runSearch(false);
+        runSearch(true); // commit on load so no-match hosts auto-declutter without clicking Search
       }
     }
     // Flush any sub-debounce pending change when the tab is hidden/closed so the
@@ -2483,7 +2483,7 @@
       updateSearchMode();
     }
     if (elements.searchInput.value.trim()) {
-      runSearch(false);
+      runSearch(true); // commit on load so the auto-declutter (no-match hosts) applies immediately
     }
     if (serverShared || serverNotes) {
       // Reflect adopted marks/selections/notes in the tree, pane, and metrics
