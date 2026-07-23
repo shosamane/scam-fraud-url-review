@@ -16,5 +16,9 @@
   { "id": "ria", "label": "Ria" },
   { "id": "bybit", "label": "Bybit" },
   { "id": "cryptocom", "label": "Crypto.com" },
-  { "id": "moneygram", "label": "MoneyGram" }
+  { "id": "moneygram", "label": "MoneyGram" },
+  { "id": "paypal", "label": "PayPal" },
+  { "id": "coinbase", "label": "Coinbase" },
+  { "id": "westernunion", "label": "Western Union" },
+  { "id": "okx", "label": "OKX" }
 ]
