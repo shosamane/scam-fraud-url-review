@@ -25,7 +25,7 @@
   const USER = (PARAMS.get("user") || "sudhamshu").toLowerCase();
   let INSTITUTION = (PARAMS.get("institution") || "chase").toLowerCase();
   const REVIEW_STORAGE_KEY = `urltree-review-${INSTITUTION}-${USER}`;
-  const SEARCH_STORAGE_KEY = `urltree-search-${INSTITUTION}`; // keywords are shared
+  const SEARCH_STORAGE_KEY = "urltree-search"; // keywords are ONE global list, shared across institutions + users
 
   // Union is the only view now (source tabs removed), so the mask is always 7.
   const sourceConfig = {

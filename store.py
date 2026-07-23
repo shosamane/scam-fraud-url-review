@@ -2,9 +2,12 @@
 
 Data model
 ----------
-- Per institution (SHARED across reviewers): the strike ``marks``, the
-  ``selections``, and the keyword ``search`` list. When either reviewer strikes,
-  selects, or edits keywords, both see the same shared document.
+- Per institution (SHARED across reviewers): the strike ``marks`` and the
+  ``selections``. When either reviewer strikes or selects, both see the same
+  shared document.
+- GLOBAL (shared across every institution AND every reviewer): the keyword
+  ``search`` list — one vocabulary. A term discovered while reviewing one
+  institution then surfaces previously-struck matches in all the others.
 - Per (institution, user) (PRIVATE): the reviewer's own ``notes`` on URLs. Notes
   are the only thing that differs between Aziz and Sudhamshu.
 
@@ -42,9 +45,24 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.environ.get("REVIEW_DB", os.path.join(HERE, "review.db"))
 
+# Keywords live in the `keywords` table under this single reserved key, so the
+# list is one GLOBAL vocabulary shared across every institution (the real
+# institution ids can never collide with it).
+_GLOBAL_KEYWORDS = "__global__"
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _split_terms(terms: str) -> list:
+    """Split a keyword string (comma- or newline-separated) into trimmed terms."""
+    out = []
+    for chunk in str(terms).replace("\n", ",").split(","):
+        t = chunk.strip()
+        if t:
+            out.append(t)
+    return out
 
 
 class ReviewStore:
@@ -97,7 +115,7 @@ class ReviewStore:
                 )
                 """
             )
-            # Shared keyword list, one row per institution.
+            # Global keyword list — one reserved row (see _GLOBAL_KEYWORDS).
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS keywords (
@@ -108,14 +126,55 @@ class ReviewStore:
                 )
                 """
             )
+        self._migrate_global_keywords()
+
+    def _migrate_global_keywords(self) -> None:
+        """One-time: keywords used to be per-institution. Fold every existing
+        per-institution list into the single global row (union of terms, most
+        recent match mode/logic wins) so nobody's keywords are lost. Idempotent:
+        does nothing once the global row exists."""
+        with self._init_lock, self._connect() as conn:
+            if conn.execute(
+                "SELECT 1 FROM keywords WHERE institution = ?", (_GLOBAL_KEYWORDS,)
+            ).fetchone():
+                return
+            rows = conn.execute(
+                "SELECT search FROM keywords ORDER BY updated_at"
+            ).fetchall()
+            if not rows:
+                return
+            terms, seen, latest = [], set(), {}
+            for row in rows:
+                search = json.loads(row["search"]) or {}
+                if not isinstance(search, dict):
+                    continue
+                for term in _split_terms(search.get("terms", "")):
+                    key = term.lower()
+                    if key not in seen:
+                        seen.add(key)
+                        terms.append(term)
+                if search:
+                    latest = search  # rows are oldest→newest, so this ends newest
+            merged = {
+                "terms": ", ".join(terms),
+                "matchMode": latest.get("matchMode", "partial"),
+                "termLogic": latest.get("termLogic", "any"),
+            }
+            conn.execute(
+                "INSERT INTO keywords (institution, search, version, updated_at) "
+                "VALUES (?, ?, 1, ?)",
+                (_GLOBAL_KEYWORDS, json.dumps(merged, separators=(",", ":")), _now()),
+            )
 
     # -- reads ---------------------------------------------------------------
 
-    def get_keywords(self, institution: str) -> dict:
+    def get_keywords(self, institution: str = "") -> dict:
+        # Keywords are one GLOBAL list shared across all institutions and users;
+        # the institution argument is accepted for API symmetry but ignored.
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT search, version FROM keywords WHERE institution = ?",
-                (institution,),
+                (_GLOBAL_KEYWORDS,),
             ).fetchone()
         if row is None:
             return {"search": {}, "version": 0}
@@ -222,6 +281,7 @@ class ReviewStore:
         return {"version": version, "updatedAt": now}
 
     def put_keywords(self, institution: str, search: dict) -> dict:
+        # Writes to the single GLOBAL keyword row regardless of institution.
         if not isinstance(search, dict):
             raise ValueError("search must be an object")
         now = _now()
@@ -235,10 +295,10 @@ class ReviewStore:
                     version=keywords.version + 1,
                     updated_at=excluded.updated_at
                 """,
-                (institution, json.dumps(search, separators=(",", ":")), now),
+                (_GLOBAL_KEYWORDS, json.dumps(search, separators=(",", ":")), now),
             )
             version = conn.execute(
-                "SELECT version FROM keywords WHERE institution = ?", (institution,)
+                "SELECT version FROM keywords WHERE institution = ?", (_GLOBAL_KEYWORDS,)
             ).fetchone()["version"]
         return {"version": version, "updatedAt": now}
 
