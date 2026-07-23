@@ -5,5 +5,16 @@
   { "id": "citi", "label": "Citi" },
   { "id": "usbank", "label": "U.S. Bank" },
   { "id": "pnc", "label": "PNC" },
-  { "id": "capitalone", "label": "Capital One" }
+  { "id": "capitalone", "label": "Capital One" },
+  { "id": "morganstanley", "label": "Morgan Stanley" },
+  { "id": "zelle", "label": "Zelle" },
+  { "id": "venmo", "label": "Venmo" },
+  { "id": "cashapp", "label": "Cash App" },
+  { "id": "revolut", "label": "Revolut" },
+  { "id": "wise", "label": "Wise" },
+  { "id": "remitly", "label": "Remitly" },
+  { "id": "ria", "label": "Ria" },
+  { "id": "bybit", "label": "Bybit" },
+  { "id": "cryptocom", "label": "Crypto.com" },
+  { "id": "moneygram", "label": "MoneyGram" }
 ]
