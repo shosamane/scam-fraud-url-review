@@ -1071,6 +1071,7 @@
     if (commit) {
       strikeHostsWithoutMatches();
     }
+    recomputeCascadeStrikes(); // the match set changed → re-derive the cascade
     autoExpandSearchMatches();
     refreshReviewPresentation();
     renderResults();
@@ -1455,9 +1456,8 @@
       return;
     }
     strikeBranch(nodeId, "");
-    autoStrikeUpFrom(nodeId);
     persistReviewMarks();
-    afterReviewChange();
+    afterReviewChange(); // recomputes the bottom-up cascade
   }
 
   function clearSearch() {
@@ -1609,10 +1609,9 @@
       terms: [...state.searchTerms], // keyword set considered when struck
       updatedAt: new Date().toISOString(),
     };
-    autoStrikeUpFrom(nodeId);
     persistReviewMarks();
     closeReviewDialog();
-    afterReviewChange();
+    afterReviewChange(); // recomputes the bottom-up cascade
   }
 
   function removeActiveReviewMark() {
@@ -1626,6 +1625,7 @@
   }
 
   function afterReviewChange() {
+    recomputeCascadeStrikes(); // re-derive the bottom-up cascade after any change
     applyReviewState();
     if (state.totalMatches) {
       renderResults();
@@ -1678,47 +1678,62 @@
     return true;
   }
 
-  function autoStrikeUpFrom(struckNodeId) {
-    // After striking a node, walk up its ancestors and strike each one whose
-    // matched DESCENDANTS are all struck — i.e. no live (non-struck) keyword match
-    // remains strictly below it. A parent that matches only through its own URL
-    // (e.g. every path under a host whose NAME contains the term) does not stop
-    // the cascade; only a live match beneath the parent, a selection, or the host
-    // root does. This is the "cascade when matched children all struck" behaviour.
-    if (!state.allMatchNodeIds.size) {
-      return;
-    }
-    // Uses the FULL match set (allMatchNodeIds), NOT the 5,000-capped result list:
-    // otherwise a live match past the cap is invisible and the cascade wrongly
-    // strikes a whole branch/host from a single strike (a false negative).
-    // Re-checks strike state live so an intermediate ancestor struck DURING this
-    // cascade stops counting as a live match, or the cascade halts one level low.
-    const hasLiveMatchBelow = (nodeId) => {
-      const selfUrl = nodeUrl(nodeId);
-      const prefix = selfUrl.endsWith("/") ? selfUrl : `${selfUrl}/`;
-      for (const matchId of state.allMatchNodeIds) {
-        if (matchId === nodeId) {
-          continue;
-        }
-        const matchUrl = nodeUrl(matchId);
-        if (matchUrl.startsWith(prefix) && !reviewStateForNode(matchId).struck) {
-          return true;
-        }
-      }
-      return false;
-    };
+  const CASCADE_NOTE = "auto: matched descendants all struck";
+
+  function recomputeCascadeStrikes() {
+    // Full BOTTOM-UP re-derivation of the cascade, run on every update (strike,
+    // unstrike, search, and load — so it's never lost on reload). Rule: a node
+    // auto-strikes iff it is on the path to a keyword match AND every one of its
+    // match-tree children is struck (manually, by inheritance, or by a cascade
+    // strike set earlier in this same bottom-up pass). It therefore strikes a node
+    // only when its ENTIRE matched subtree is struck — never hiding a live match.
+    // Cascade marks are ephemeral (stripped from what's saved); this is what
+    // re-creates them each time.
+    const nodes = window.URL_TREE_DATA.nodes;
     let changed = false;
-    let currentId = window.URL_TREE_DATA.nodes[struckNodeId][NODE_PARENT];
-    while (currentId !== -1) {
-      if (hasSelectionAtOrBelow(currentId) || hasLiveMatchBelow(currentId)) {
-        break;
+    for (const url of Object.keys(state.marks)) {
+      if (state.marks[url].note === CASCADE_NOTE) {
+        delete state.marks[url];
+        changed = true;
       }
-      changed = strikeBranch(currentId, "auto: matched descendants all struck") || changed;
-      currentId = window.URL_TREE_DATA.nodes[currentId][NODE_PARENT];
     }
-    if (changed) {
-      persistReviewMarks();
+    if (!state.allMatchNodeIds.size) {
+      return changed;
     }
+    // Build the match tree (every match + its ancestors) and each node's depth.
+    const inTree = new Set();
+    const depth = new Map();
+    for (const matchId of state.allMatchNodeIds) {
+      const chain = [];
+      let cur = matchId;
+      while (cur !== -1) {
+        chain.push(cur);
+        cur = nodes[cur][NODE_PARENT];
+      }
+      for (let i = 0; i < chain.length; i += 1) {
+        inTree.add(chain[i]);
+        if (!depth.has(chain[i])) {
+          depth.set(chain[i], chain.length - 1 - i);
+        }
+      }
+    }
+    // Deepest first, so a node's children are decided before the node itself.
+    const ordered = [...inTree].sort((a, b) => depth.get(b) - depth.get(a));
+    for (const nodeId of ordered) {
+      const matchKids = nodes[nodeId][NODE_CHILDREN].filter((c) => inTree.has(c));
+      if (matchKids.length === 0) {
+        continue; // a matched leaf: only a manual strike marks it
+      }
+      if (reviewStateForNode(nodeId).struck || hasSelectionAtOrBelow(nodeId)) {
+        continue; // already struck, or protected by a selection
+      }
+      if (matchKids.every((c) => reviewStateForNode(c).struck)) {
+        if (strikeBranch(nodeId, CASCADE_NOTE)) {
+          changed = true;
+        }
+      }
+    }
+    return changed;
   }
 
   function exportReviewMarks() {
