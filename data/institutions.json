@@ -20,5 +20,7 @@
   { "id": "paypal", "label": "PayPal" },
   { "id": "coinbase", "label": "Coinbase" },
   { "id": "westernunion", "label": "Western Union" },
-  { "id": "okx", "label": "OKX" }
+  { "id": "okx", "label": "OKX" },
+  { "id": "binanceus", "label": "Binance.US" },
+  { "id": "bitget", "label": "Bitget" }
 ]
